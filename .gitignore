@@ -45,7 +45,13 @@ dist/
 build/
 eggs/
 .eggs/
-lib/
+# Only ignore Python lib/ directories (in virtualenvs and Python packages)
+# Do NOT ignore frontend/src/lib/ (source code) - use specific patterns
+venv/lib/
+.venv/lib/
+env/lib/
+ENV/lib/
+*/site-packages/
 lib64/
 parts/
 sdist/
