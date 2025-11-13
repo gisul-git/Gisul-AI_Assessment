@@ -5,7 +5,7 @@ import axios from "axios";
 import { getProviders, signIn } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
-import fastApiClient from "../../lib/fastapi";
+import fastApiClient from "lib/fastapi";
 
 interface StatusMessage {
   type: "success" | "error";

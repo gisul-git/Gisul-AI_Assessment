@@ -4,8 +4,8 @@ import AzureADProvider from "next-auth/providers/azure-ad";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 
-import fastApiClient from "../../../lib/fastapi";
-import type { BackendUser } from "../../../types/auth";
+import fastApiClient from "lib/fastapi";
+import type { BackendUser } from "types/auth";
 
 export const authOptions: NextAuthOptions = {
   pages: {
