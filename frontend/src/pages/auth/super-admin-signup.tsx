@@ -3,7 +3,7 @@ import { useRouter } from "next/router";
 import axios from "axios";
 import Image from "next/image";
 import Link from "next/link";
-import fastApiClient from "lib/fastapi";
+import fastApiClient from "@/lib/fastapi";
 
 interface StatusMessage {
   type: "success" | "error";

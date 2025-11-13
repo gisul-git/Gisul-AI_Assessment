@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
-import fastApiClient from "lib/fastapi";
+import fastApiClient from "@/lib/fastapi";
 
 interface SignupPayload {
   name: string;

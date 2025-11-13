@@ -4,8 +4,8 @@ import AzureADProvider from "next-auth/providers/azure-ad";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 
-import fastApiClient from "lib/fastapi";
-import type { BackendUser } from "types/auth";
+import fastApiClient from "@/lib/fastapi";
+import type { BackendUser } from "@/types/auth";
 
 export const authOptions: NextAuthOptions = {
   pages: {
@@ -20,6 +20,7 @@ export const authOptions: NextAuthOptions = {
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
+        mode: { label: "Mode", type: "text" },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
