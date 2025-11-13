@@ -60,32 +60,6 @@ export default function HomePage() {
   
           </div>
         </div>
-
-        <div
-          className="card"
-          style={{
-            background: "linear-gradient(135deg, rgba(148,163,184,0.15), rgba(37,99,235,0.15))",
-            border: "1px solid rgba(148, 163, 184, 0.2)",
-            color: "#e2e8f0",
-          }}
-        >
-          <h2 style={{ marginTop: 0, marginBottom: "1rem" }}>Why teams choose us</h2>
-          <ul style={{ listStyle: "none", padding: 0, margin: 0, lineHeight: 1.8, color: "#cbd5f5" }}>
-            <li>
-              <strong>Role-based workflows:</strong> Seamlessly onboard organization admins, editors, and viewers.
-            </li>
-            <li>
-              <strong>AI-generated content:</strong> Build assessments aligned to job roles, experience levels, and skills.
-            </li>
-            <li>
-              <strong>Enterprise security:</strong> Single sign-on with Microsoft and Google plus granular user controls.
-            </li>
-            <li>
-              <strong>Scalable tiers:</strong> Start free with limited assessments and unlock premium capabilities when you’re
-              ready.
-            </li>
-          </ul>
-        </div>
       </section>
 
       <footer
