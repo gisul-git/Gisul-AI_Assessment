@@ -63,6 +63,7 @@ async def not_found_handler(request: Request, exc: Any) -> JSONResponse:
 
 
 @app.get("/")
+@app.head("/")
 async def root() -> dict[str, Any]:
     return {
         "message": "AI Assessment API is running successfully!",
@@ -72,6 +73,7 @@ async def root() -> dict[str, Any]:
 
 
 @app.get("/health")
+@app.head("/health")
 async def health_check() -> dict[str, Any]:
     return {
         "message": "✅ Health check passed",
