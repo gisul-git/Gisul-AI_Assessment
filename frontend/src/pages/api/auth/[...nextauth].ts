@@ -14,6 +14,7 @@ export const authOptions: NextAuthOptions = {
   session: {
     strategy: "jwt",
   },
+  debug: process.env.NODE_ENV === "development",
   providers: [
     CredentialsProvider({
       name: "Password Credentials",
@@ -77,6 +78,9 @@ export const authOptions: NextAuthOptions = {
       }
 
       try {
+        const baseURL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        console.log("Calling backend OAuth login at:", `${baseURL}/api/auth/oauth-login`);
+        
         const response = await fastApiClient.post("/api/auth/oauth-login", {
           email: user.email,
           name: user.name ?? (profile as any)?.name ?? user.email.split("@")[0],
@@ -85,6 +89,7 @@ export const authOptions: NextAuthOptions = {
 
         const data = response.data?.data;
         if (!data?.token || !data?.user) {
+          console.error("Invalid OAuth response:", response.data);
           throw new Error("Invalid response from authentication service");
         }
 
@@ -98,10 +103,25 @@ export const authOptions: NextAuthOptions = {
         };
 
         Object.assign(user, backendUser);
+        console.log("OAuth sign-in successful for:", user.email);
         return true;
       } catch (error: any) {
-        console.error("OAuth sign-in failed", error);
-        throw new Error(error?.message ?? "OAuth sign-in failed");
+        console.error("OAuth sign-in failed:", {
+          message: error?.message,
+          response: error?.response?.data,
+          status: error?.response?.status,
+          code: error?.code,
+          baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
+        });
+        
+        // Provide more helpful error messages
+        if (error?.code === "ECONNREFUSED") {
+          throw new Error("Cannot connect to backend. Make sure the backend is running on http://localhost:8000");
+        } else if (error?.code === "ETIMEDOUT") {
+          throw new Error("Backend request timed out. Check if the backend is running and accessible");
+        }
+        
+        throw new Error((error?.response?.data?.detail || error?.response?.data?.message || error?.message) ?? "OAuth sign-in failed");
       }
     },
     async jwt({ token, user, account }) {
