@@ -353,7 +353,7 @@ export default function ConfigureTopicsPage() {
                     </label>
                     <select
                       value={topic.difficulty || "Medium"}
-                      onChange={(e) => handleUpdateTopic(index, "difficulty", e.target.value)}
+                      onChange={(e) => handleUpdateTopic(topic.topic, "difficulty", e.target.value)}
                       style={{
                         width: "100%",
                         padding: "0.75rem",
