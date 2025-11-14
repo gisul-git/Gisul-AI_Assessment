@@ -15,8 +15,16 @@ async def connect_to_mongo() -> None:
     global _client, _db
     settings = get_settings()
     if _client is None:
-        _client = AsyncIOMotorClient(settings.mongo_uri)
+        # Add connection timeout and server selection timeout to prevent hanging
+        _client = AsyncIOMotorClient(
+            settings.mongo_uri,
+            serverSelectionTimeoutMS=5000,  # 5 seconds to find a server
+            connectTimeoutMS=10000,  # 10 seconds to connect
+            socketTimeoutMS=30000,  # 30 seconds for socket operations
+        )
         _db = _client[settings.mongo_db]
+        # Test the connection
+        await _client.admin.command("ping")
 
 
 async def close_mongo_connection() -> None:

@@ -248,7 +248,7 @@ CRITICAL REMINDERS:
             
             # Use gpt-4o-mini for better quality, with higher token limit
             response = await client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "You are an expert assessment writer. Always output valid JSON arrays. Never include markdown code blocks or explanations outside the JSON."},
                     {"role": "user", "content": prompt}

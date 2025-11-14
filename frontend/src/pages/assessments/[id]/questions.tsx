@@ -455,7 +455,7 @@ export default function QuestionsPage() {
                                 }}
                               >
                                 <div style={{ flex: 1 }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem", flexWrap: "wrap" }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                                     <span
                                       style={{
                                         backgroundColor: "#6953a3",
@@ -497,21 +497,21 @@ export default function QuestionsPage() {
                                       {question.difficulty}
                                     </span>
                                   </div>
-                                  <p
-                                    style={{
-                                      color: "#1e293b",
-                                      margin: 0,
-                                      lineHeight: 1.6,
-                                      fontWeight: 500,
-                                      fontSize: "0.9375rem",
-                                      display: "-webkit-box",
-                                      WebkitLineClamp: isQExpanded ? "none" : 2,
-                                      WebkitBoxOrient: "vertical",
-                                      overflow: "hidden",
-                                    }}
-                                  >
-                                    {question.questionText}
-                                  </p>
+                                  {!isQExpanded && (
+                                    <p
+                                      style={{
+                                        color: "#64748b",
+                                        margin: 0,
+                                        marginTop: "0.5rem",
+                                        lineHeight: 1.5,
+                                        fontWeight: 400,
+                                        fontSize: "0.875rem",
+                                        fontStyle: "italic",
+                                      }}
+                                    >
+                                      Click to view question details
+                                    </p>
+                                  )}
                                 </div>
                                 <div style={{ fontSize: "1.25rem", color: "#64748b", marginLeft: "1rem", transition: "transform 0.2s", transform: isQExpanded ? "rotate(180deg)" : "rotate(0deg)" }}>
                                   ▼
@@ -522,7 +522,7 @@ export default function QuestionsPage() {
                               {isQExpanded && (
                                 <div style={{ padding: "1.25rem", backgroundColor: "#f8fafc" }}>
                                   <div style={{ marginBottom: "1rem" }}>
-                                    <p style={{ color: "#1e293b", lineHeight: 1.7, whiteSpace: "pre-wrap", margin: 0 }}>
+                                    <p style={{ color: "#1e293b", lineHeight: 1.7, whiteSpace: "pre-wrap", margin: 0, fontWeight: 700 }}>
                                       {question.questionText}
                                     </p>
                                   </div>

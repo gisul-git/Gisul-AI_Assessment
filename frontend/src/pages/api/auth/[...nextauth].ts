@@ -82,7 +82,7 @@ export const authOptions: NextAuthOptions = {
         
         // Quick health check before OAuth login
         try {
-          await fastApiClient.get("/health", { timeout: 5000 });
+          await fastApiClient.get("/health", { timeout: 10000 });
         } catch (healthError: any) {
           console.error("Backend health check failed:", healthError);
           if (healthError?.code === "ECONNREFUSED" || healthError?.message?.includes("ECONNREFUSED")) {

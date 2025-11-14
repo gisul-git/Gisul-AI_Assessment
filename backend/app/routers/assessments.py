@@ -848,18 +848,23 @@ async def get_all_assessments_with_schedule(
                     except ValueError:
                         pass
 
-        # Fetch assessments with required fields
-        cursor = db.assessments.find(query, {"title": 1, "status": 1, "schedule": 1, "createdAt": 1, "updatedAt": 1, "organization": 1, "createdBy": 1})
+        # Fetch assessments with required fields - optimized query
+        # Limit to prevent loading too many documents at once (safety limit)
+        cursor = db.assessments.find(query, {"title": 1, "status": 1, "schedule": 1, "createdAt": 1, "updatedAt": 1, "organization": 1, "createdBy": 1}).limit(1000)
+        all_docs = await cursor.to_list(length=1000)  # Fetch all at once with limit
+        
         assessments = []
         
-        async for doc in cursor:
+        # Process documents in batch
+        for doc in all_docs:
             try:
-                # Use the same access check logic as other endpoints
-                try:
-                    _check_assessment_access(doc, current_user)
-                except HTTPException:
-                    # User doesn't have access - skip this assessment
-                    continue
+                # Quick access check - skip if user doesn't have access
+                # Only check if query didn't already filter by organization/createdBy
+                if current_user.get("role") != "super_admin":
+                    try:
+                        _check_assessment_access(doc, current_user)
+                    except HTTPException:
+                        continue  # Skip this assessment
                 
                 schedule = doc.get("schedule")
                 assessment_data = {
