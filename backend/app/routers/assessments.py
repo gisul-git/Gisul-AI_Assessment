@@ -102,28 +102,119 @@ async def generate_topics(
     current_user: Dict[str, Any] = Depends(require_editor),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    if not payload.skills:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing input fields")
+    # Validate assessment type
+    valid_types = {"aptitude", "technical"}
+    assessment_types = set(payload.assessmentType)
+    if not assessment_types.issubset(valid_types):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid assessment type. Must be one or more of: {valid_types}",
+        )
 
-    topics = await generate_topics_from_input(payload.jobRole, payload.experience, payload.skills)
-    topic_docs = [
-        {
-            "topic": t,
-            "numQuestions": 0,
-            "questionTypes": [],
-            "difficulty": "Medium",
-            "source": "AI",
-            "questions": [],
-            "questionConfigs": [],
+    # Validate required fields based on assessment type
+    if "technical" in assessment_types:
+        if not payload.jobRole or not payload.experience or not payload.skills or len(payload.skills) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Job role, experience, and at least one skill are required for technical assessments",
+            )
+        if not payload.numTopics or payload.numTopics < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Number of topics is required and must be at least 1 for technical assessments",
+            )
+
+    if "aptitude" in assessment_types:
+        if not payload.aptitudeConfig:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Aptitude configuration is required for aptitude assessments",
+            )
+        # Check if at least one aptitude category is enabled
+        apt_config = payload.aptitudeConfig
+        has_enabled = (
+            (apt_config.quantitative and apt_config.quantitative.enabled)
+            or (apt_config.logicalReasoning and apt_config.logicalReasoning.enabled)
+            or (apt_config.verbalAbility and apt_config.verbalAbility.enabled)
+            or (apt_config.numericalReasoning and apt_config.numericalReasoning.enabled)
+        )
+        if not has_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one aptitude category must be enabled",
+            )
+
+    topic_docs: List[Dict[str, Any]] = []
+    custom_topics: List[str] = []
+    title_parts: List[str] = []
+    description_parts: List[str] = []
+
+    # Handle Aptitude topics
+    if "aptitude" in assessment_types and payload.aptitudeConfig:
+        apt_config = payload.aptitudeConfig
+        aptitude_category_map = {
+            "quantitative": "Quantitative",
+            "logicalReasoning": "Logical Reasoning",
+            "verbalAbility": "Verbal Ability",
+            "numericalReasoning": "Numerical Reasoning",
         }
-        for t in topics
-    ]
+
+        for key, category_name in aptitude_category_map.items():
+            category_config = getattr(apt_config, key, None)
+            if category_config and category_config.enabled:
+                topic_docs.append(
+                    {
+                        "topic": category_name,
+                        "numQuestions": category_config.numQuestions,
+                        "questionTypes": ["MCQ"],
+                        "difficulty": category_config.difficulty,
+                        "source": "AI",
+                        "category": "aptitude",
+                        "questions": [],
+                        "questionConfigs": [],
+                    }
+                )
+                custom_topics.append(category_name)
+                title_parts.append(category_name)
+                description_parts.append(f"{category_name} ({category_config.difficulty})")
+
+    # Handle Technical topics
+    if "technical" in assessment_types:
+        topics = await generate_topics_from_input(payload.jobRole, payload.experience, payload.skills, payload.numTopics)
+        technical_topic_docs = [
+            {
+                "topic": t,
+                "numQuestions": 0,
+                "questionTypes": [],
+                "difficulty": "Medium",
+                "source": "AI",
+                "category": "technical",
+                "questions": [],
+                "questionConfigs": [],
+            }
+            for t in topics
+        ]
+        topic_docs.extend(technical_topic_docs)
+        custom_topics.extend(topics)
+        title_parts.append(payload.jobRole)
+        description_parts.append(f"{payload.jobRole} test for {payload.experience} exp level")
+
+    # Build title and description
+    if len(title_parts) == 1:
+        title = f"{title_parts[0]} Assessment"
+    elif len(title_parts) == 2:
+        title = f"{title_parts[0]} & {title_parts[1]} Assessment"
+    else:
+        title = "Assessment"
+
+    description = ". ".join(description_parts) if description_parts else "Assessment"
 
     assessment_doc: Dict[str, Any] = {
-        "title": f"{payload.jobRole} Assessment",
-        "description": f"{payload.jobRole} test for {payload.experience} exp level.",
+        "title": title,
+        "description": description,
         "topics": topic_docs,
-        "customTopics": topics,
+        "customTopics": custom_topics,
+        "assessmentType": list(assessment_types),
         "status": "draft",
         "createdBy": to_object_id(current_user.get("id")),
         "organization": to_object_id(current_user.get("organization")) if current_user.get("organization") else None,
@@ -131,6 +222,26 @@ async def generate_topics(
         "createdAt": _now_utc(),
         "updatedAt": _now_utc(),
     }
+
+    # Store configuration
+    if "technical" in assessment_types:
+        assessment_doc["technicalConfig"] = {
+            "jobRole": payload.jobRole,
+            "experience": payload.experience,
+            "skills": payload.skills,
+        }
+
+    if "aptitude" in assessment_types and payload.aptitudeConfig:
+        apt_config_dict: Dict[str, Any] = {}
+        if payload.aptitudeConfig.quantitative:
+            apt_config_dict["quantitative"] = payload.aptitudeConfig.quantitative.model_dump()
+        if payload.aptitudeConfig.logicalReasoning:
+            apt_config_dict["logicalReasoning"] = payload.aptitudeConfig.logicalReasoning.model_dump()
+        if payload.aptitudeConfig.verbalAbility:
+            apt_config_dict["verbalAbility"] = payload.aptitudeConfig.verbalAbility.model_dump()
+        if payload.aptitudeConfig.numericalReasoning:
+            apt_config_dict["numericalReasoning"] = payload.aptitudeConfig.numericalReasoning.model_dump()
+        assessment_doc["aptitudeConfig"] = apt_config_dict
 
     result = await db.assessments.insert_one(assessment_doc)
     assessment_doc["_id"] = result.inserted_id
@@ -174,7 +285,9 @@ async def update_topic_settings(
 
     assessment["topics"] = topics
     await _save_assessment(db, assessment)
-    return success_response("Topic settings updated successfully", assessment["topics"])
+    # Serialize topics to convert ObjectIds and datetimes to JSON-serializable formats
+    serialized_topics = convert_object_ids(assessment["topics"])
+    return success_response("Topic settings updated successfully", serialized_topics)
 
 
 @router.post("/add-topic")
@@ -230,7 +343,9 @@ async def add_custom_topics(
     assessment["topics"] = topics
     assessment["customTopics"] = list(custom_topics)
     await _save_assessment(db, assessment)
-    return success_response("Custom topics added successfully", assessment["topics"])
+    # Serialize topics to convert ObjectIds and datetimes to JSON-serializable formats
+    serialized_topics = convert_object_ids(assessment["topics"])
+    return success_response("Custom topics added successfully", serialized_topics)
 
 
 @router.delete("/remove-topic")
@@ -250,18 +365,33 @@ async def remove_custom_topics(
     assessment["customTopics"] = [t for t in assessment.get("customTopics", []) if t not in topics_to_remove]
 
     await _save_assessment(db, assessment)
-    return success_response("Topics removed successfully", assessment["topics"])
+    # Serialize topics to convert ObjectIds and datetimes to JSON-serializable formats
+    serialized_topics = convert_object_ids(assessment["topics"])
+    return success_response("Topics removed successfully", serialized_topics)
 
 
 def _build_generation_config(topic_obj: Dict[str, Any]) -> Dict[str, Any]:
     config = {"numQuestions": topic_obj.get("numQuestions", 0)}
     question_configs = topic_obj.get("questionConfigs") or []
+    
+    # For aptitude topics, always use MCQ only
+    if topic_obj.get("category") == "aptitude":
+        num_questions = topic_obj.get("numQuestions", 0)
+        difficulty = topic_obj.get("difficulty", "Medium")
+        for index in range(num_questions):
+            config[f"Q{index + 1}type"] = "MCQ"
+            config[f"Q{index + 1}difficulty"] = difficulty
+        return config
+    
     if question_configs:
         for index, q_config in enumerate(question_configs):
             config[f"Q{index + 1}type"] = q_config.get("type", "Subjective")
             config[f"Q{index + 1}difficulty"] = q_config.get("difficulty", "Medium")
     else:
-        for index, q_type in enumerate(topic_obj.get("questionTypes") or []):
+        question_types = topic_obj.get("questionTypes") or []
+        # For technical topics, use only the first question type if multiple are selected
+        q_type = question_types[0] if question_types else "Subjective"
+        for index in range(topic_obj.get("numQuestions", 0)):
             config[f"Q{index + 1}type"] = q_type
             config[f"Q{index + 1}difficulty"] = topic_obj.get("difficulty", "Medium")
     return config

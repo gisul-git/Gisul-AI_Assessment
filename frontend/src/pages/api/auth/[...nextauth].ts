@@ -79,6 +79,20 @@ export const authOptions: NextAuthOptions = {
 
       try {
         const baseURL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        
+        // Quick health check before OAuth login
+        try {
+          await fastApiClient.get("/health", { timeout: 5000 });
+        } catch (healthError: any) {
+          console.error("Backend health check failed:", healthError);
+          if (healthError?.code === "ECONNREFUSED" || healthError?.message?.includes("ECONNREFUSED")) {
+            throw new Error("Backend server is not running. Please start the backend server on http://localhost:8000");
+          } else if (healthError?.code === "ETIMEDOUT" || healthError?.message?.includes("timeout")) {
+            throw new Error("Backend server is not responding. Please check if it's running on http://localhost:8000");
+          }
+          // If health check fails but it's not a connection issue, continue with OAuth login
+        }
+        
         console.log("Calling backend OAuth login at:", `${baseURL}/api/auth/oauth-login`);
         
         const response = await fastApiClient.post("/api/auth/oauth-login", {
@@ -115,10 +129,12 @@ export const authOptions: NextAuthOptions = {
         });
         
         // Provide more helpful error messages
-        if (error?.code === "ECONNREFUSED") {
-          throw new Error("Cannot connect to backend. Make sure the backend is running on http://localhost:8000");
-        } else if (error?.code === "ETIMEDOUT") {
-          throw new Error("Backend request timed out. Check if the backend is running and accessible");
+        if (error?.code === "ECONNREFUSED" || error?.message?.includes("ECONNREFUSED")) {
+          throw new Error("Cannot connect to backend server. Please ensure the backend is running on http://localhost:8000");
+        } else if (error?.code === "ETIMEDOUT" || error?.message?.includes("timeout")) {
+          throw new Error("Backend request timed out. Please ensure the backend server is running and MongoDB is connected. Check http://localhost:8000/health");
+        } else if (error?.code === "ERR_NETWORK" || error?.message?.includes("Network Error")) {
+          throw new Error("Network error. Please check if the backend server is running on http://localhost:8000");
         }
         
         throw new Error((error?.response?.data?.detail || error?.response?.data?.message || error?.message) ?? "OAuth sign-in failed");

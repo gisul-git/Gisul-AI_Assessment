@@ -14,6 +14,7 @@ interface Topic {
   source: string;
   questions: any[];
   questionConfigs: any[];
+  category?: string; // "aptitude" or "technical"
 }
 
 export default function ConfigureTopicsPage() {
@@ -37,7 +38,17 @@ export default function ConfigureTopicsPage() {
       setError(null);
       const response = await axios.get(`/api/assessments/get-topics?assessmentId=${id}`);
       if (response.data?.success && response.data?.data) {
-        setTopics(response.data.data);
+        // Ensure aptitude topics have MCQ only, and technical topics have at most one question type
+        const topicsData = response.data.data.map((topic: Topic) => {
+          if (topic.category === "aptitude") {
+            return { ...topic, questionTypes: ["MCQ"] };
+          } else {
+            // For technical topics, ensure only one question type is selected
+            const questionTypes = topic.questionTypes || [];
+            return { ...topic, questionTypes: questionTypes.length > 0 ? [questionTypes[0]] : [] };
+          }
+        });
+        setTopics(topicsData);
       }
     } catch (err: any) {
       console.error("Error fetching topics:", err);
@@ -47,19 +58,32 @@ export default function ConfigureTopicsPage() {
     }
   };
 
-  const handleUpdateTopic = (index: number, field: string, value: any) => {
-    const updatedTopics = [...topics];
-    updatedTopics[index] = { ...updatedTopics[index], [field]: value };
+  const handleUpdateTopic = (topicName: string, field: string, value: any) => {
+    const updatedTopics = topics.map((topic) =>
+      topic.topic === topicName ? { ...topic, [field]: value } : topic
+    );
     setTopics(updatedTopics);
   };
 
-  const handleToggleQuestionType = (topicIndex: number, questionType: string) => {
-    const topic = topics[topicIndex];
+  const handleToggleQuestionType = (topicName: string, questionType: string) => {
+    const topic = topics.find((t) => t.topic === topicName);
+    if (!topic) return;
+    
+    // For aptitude topics, always keep MCQ only (no toggle needed)
+    if (topic.category === "aptitude") {
+      handleUpdateTopic(topicName, "questionTypes", ["MCQ"]);
+      return;
+    }
+    
+    // For technical topics, allow only ONE selection at a time (radio button behavior)
     const currentTypes = topic.questionTypes || [];
-    const newTypes = currentTypes.includes(questionType)
-      ? currentTypes.filter((t) => t !== questionType)
-      : [...currentTypes, questionType];
-    handleUpdateTopic(topicIndex, "questionTypes", newTypes);
+    if (currentTypes.includes(questionType)) {
+      // If clicking the already selected type, keep it selected (don't deselect)
+      handleUpdateTopic(topicName, "questionTypes", [questionType]);
+    } else {
+      // Select the new type (replace all previous selections)
+      handleUpdateTopic(topicName, "questionTypes", [questionType]);
+    }
   };
 
   const handleAddCustomTopic = async () => {
@@ -100,8 +124,19 @@ export default function ConfigureTopicsPage() {
   };
 
   const handleSaveAndContinue = async () => {
+    // Ensure aptitude topics have MCQ only, and technical topics have exactly one question type
+    const updatedTopics = topics.map((topic) => {
+      if (topic.category === "aptitude") {
+        return { ...topic, questionTypes: ["MCQ"] };
+      } else {
+        // For technical topics, ensure only one question type is selected
+        const questionTypes = topic.questionTypes || [];
+        return { ...topic, questionTypes: questionTypes.length > 0 ? [questionTypes[0]] : [] };
+      }
+    });
+    
     // Validate that at least one topic has questions configured
-    const validTopics = topics.filter(
+    const validTopics = updatedTopics.filter(
       (t) => t.numQuestions > 0 && t.questionTypes && t.questionTypes.length > 0
     );
 
@@ -114,12 +149,23 @@ export default function ConfigureTopicsPage() {
     setError(null);
 
     try {
-      const updatedTopics = topics.map((topic) => ({
-        topic: topic.topic,
-        numQuestions: topic.numQuestions,
-        questionTypes: topic.questionTypes || [],
-        difficulty: topic.difficulty,
-      }));
+      const updatedTopics = topics.map((topic) => {
+        // Ensure aptitude topics have MCQ only
+        let questionTypes = topic.questionTypes || [];
+        if (topic.category === "aptitude") {
+          questionTypes = ["MCQ"];
+        } else {
+          // For technical topics, ensure only one question type is selected
+          questionTypes = questionTypes.length > 0 ? [questionTypes[0]] : [];
+        }
+        
+        return {
+          topic: topic.topic,
+          numQuestions: topic.numQuestions,
+          questionTypes: questionTypes,
+          difficulty: topic.difficulty,
+        };
+      });
 
       const response = await axios.post("/api/assessments/update-topics", {
         assessmentId: id,
@@ -198,12 +244,21 @@ export default function ConfigureTopicsPage() {
           </div>
         </div>
 
-        {/* Topics List */}
+        {/* Topics List - Grouped by Category */}
         <div style={{ marginBottom: "2rem" }}>
           {topics.length === 0 ? (
             <p style={{ textAlign: "center", color: "#64748b", padding: "2rem" }}>No topics available</p>
           ) : (
-            topics.map((topic, index) => (
+            <>
+              {/* Aptitude Topics Section */}
+              {topics.some((t) => t.category === "aptitude") && (
+                <div style={{ marginBottom: "2.5rem" }}>
+                  <h2 style={{ marginBottom: "1rem", fontSize: "1.25rem", color: "#0f172a", borderBottom: "2px solid #3b82f6", paddingBottom: "0.5rem" }}>
+                    Aptitude Topics
+                  </h2>
+                  {topics
+                    .filter((topic) => topic.category === "aptitude")
+                    .map((topic) => (
               <div
                 key={topic.topic}
                 style={{
@@ -252,8 +307,36 @@ export default function ConfigureTopicsPage() {
                       type="number"
                       min="0"
                       max="20"
-                      value={topic.numQuestions || 0}
-                      onChange={(e) => handleUpdateTopic(index, "numQuestions", parseInt(e.target.value) || 0)}
+                      value={topic.numQuestions || ""}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "" || val === null || val === undefined) {
+                          handleUpdateTopic(topic.topic, "numQuestions", 0);
+                        } else {
+                          const num = parseInt(val, 10);
+                          if (!isNaN(num) && num >= 0) {
+                            handleUpdateTopic(topic.topic, "numQuestions", num);
+                          }
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        // Allow: backspace, delete, tab, escape, enter, decimal point
+                        if ([46, 8, 9, 27, 13, 110, 190].indexOf(e.keyCode) !== -1 ||
+                          // Allow: Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+X
+                          (e.keyCode === 65 && e.ctrlKey === true) ||
+                          (e.keyCode === 67 && e.ctrlKey === true) ||
+                          (e.keyCode === 86 && e.ctrlKey === true) ||
+                          (e.keyCode === 88 && e.ctrlKey === true) ||
+                          // Allow: home, end, left, right
+                          (e.keyCode >= 35 && e.keyCode <= 39)) {
+                          return;
+                        }
+                        // Ensure that it is a number and stop the keypress
+                        if ((e.shiftKey || (e.keyCode < 48 || e.keyCode > 57)) && (e.keyCode < 96 || e.keyCode > 105)) {
+                          e.preventDefault();
+                        }
+                      }}
                       style={{
                         width: "100%",
                         padding: "0.75rem",
@@ -291,25 +374,31 @@ export default function ConfigureTopicsPage() {
 
                 <div style={{ marginTop: "1rem" }}>
                   <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: 500, color: "#1e293b" }}>
-                    Question Types
+                    Question Types {topic.category === "aptitude" && <span style={{ fontSize: "0.875rem", color: "#64748b", fontWeight: 400 }}>(MCQ only for aptitude)</span>}
                   </label>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                    {QUESTION_TYPES.map((type) => {
-                      const isSelected = (topic.questionTypes || []).includes(type);
+                    {(topic.category === "aptitude" ? ["MCQ"] : QUESTION_TYPES).map((type) => {
+                      // For aptitude, MCQ is always selected
+                      // For technical, check if this is the selected one (only one should be selected)
+                      const isSelected = topic.category === "aptitude" 
+                        ? type === "MCQ" 
+                        : (topic.questionTypes || []).includes(type) && (topic.questionTypes || []).length === 1 && (topic.questionTypes || [])[0] === type;
                       return (
                         <button
                           key={type}
                           type="button"
-                          onClick={() => handleToggleQuestionType(index, type)}
+                          onClick={() => handleToggleQuestionType(topic.topic, type)}
+                          disabled={topic.category === "aptitude"}
                           style={{
                             padding: "0.5rem 1rem",
                             border: `1px solid ${isSelected ? "#3b82f6" : "#e2e8f0"}`,
                             borderRadius: "0.5rem",
                             backgroundColor: isSelected ? "#eff6ff" : "#ffffff",
-                            color: isSelected ? "#1e40af" : "#475569",
-                            cursor: "pointer",
+                            color: isSelected ? "#1e40af" : topic.category === "aptitude" ? "#94a3b8" : "#475569",
+                            cursor: topic.category === "aptitude" ? "not-allowed" : "pointer",
                             fontSize: "0.875rem",
                             fontWeight: isSelected ? 600 : 400,
+                            opacity: topic.category === "aptitude" ? 0.7 : 1,
                           }}
                         >
                           {type}
@@ -319,7 +408,172 @@ export default function ConfigureTopicsPage() {
                   </div>
                 </div>
               </div>
-            ))
+                    ))}
+                </div>
+              )}
+
+              {/* Technical Topics Section */}
+              {topics.some((t) => t.category === "technical" || !t.category) && (
+                <div style={{ marginBottom: "2.5rem" }}>
+                  <h2 style={{ marginBottom: "1rem", fontSize: "1.25rem", color: "#0f172a", borderBottom: "2px solid #3b82f6", paddingBottom: "0.5rem" }}>
+                    Technical Topics
+                  </h2>
+                  {topics
+                    .filter((topic) => topic.category === "technical" || !topic.category)
+                    .map((topic) => (
+                      <div
+                        key={topic.topic}
+                        style={{
+                          border: "1px solid #e2e8f0",
+                          borderRadius: "0.75rem",
+                          padding: "1.5rem",
+                          marginBottom: "1.5rem",
+                          backgroundColor: "#ffffff",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: "1rem" }}>
+                          <div>
+                            <h3 style={{ margin: 0, color: "#0f172a", fontSize: "1.125rem" }}>{topic.topic}</h3>
+                            <span
+                              style={{
+                                fontSize: "0.75rem",
+                                color: "#64748b",
+                                marginTop: "0.25rem",
+                                display: "inline-block",
+                              }}
+                            >
+                              Source: {topic.source}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveTopic(topic.topic)}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              color: "#ef4444",
+                              cursor: "pointer",
+                              fontSize: "0.875rem",
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem" }}>
+                          <div>
+                            <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: 500, color: "#1e293b" }}>
+                              Number of Questions
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="20"
+                              value={topic.numQuestions || ""}
+                              onFocus={(e) => e.target.select()}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === "" || val === null || val === undefined) {
+                                  handleUpdateTopic(topic.topic, "numQuestions", 0);
+                                } else {
+                                  const num = parseInt(val, 10);
+                                  if (!isNaN(num) && num >= 0) {
+                                    handleUpdateTopic(topic.topic, "numQuestions", num);
+                                  }
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                // Allow: backspace, delete, tab, escape, enter, decimal point
+                                if ([46, 8, 9, 27, 13, 110, 190].indexOf(e.keyCode) !== -1 ||
+                                  // Allow: Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+X
+                                  (e.keyCode === 65 && e.ctrlKey === true) ||
+                                  (e.keyCode === 67 && e.ctrlKey === true) ||
+                                  (e.keyCode === 86 && e.ctrlKey === true) ||
+                                  (e.keyCode === 88 && e.ctrlKey === true) ||
+                                  // Allow: home, end, left, right
+                                  (e.keyCode >= 35 && e.keyCode <= 39)) {
+                                  return;
+                                }
+                                // Ensure that it is a number and stop the keypress
+                                if ((e.shiftKey || (e.keyCode < 48 || e.keyCode > 57)) && (e.keyCode < 96 || e.keyCode > 105)) {
+                                  e.preventDefault();
+                                }
+                              }}
+                              style={{
+                                width: "100%",
+                                padding: "0.75rem",
+                                border: "1px solid #e2e8f0",
+                                borderRadius: "0.5rem",
+                                fontSize: "1rem",
+                              }}
+                            />
+                          </div>
+
+                          <div>
+                            <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: 500, color: "#1e293b" }}>
+                              Difficulty
+                            </label>
+                            <select
+                              value={topic.difficulty || "Medium"}
+                              onChange={(e) => handleUpdateTopic(topic.topic, "difficulty", e.target.value)}
+                              style={{
+                                width: "100%",
+                                padding: "0.75rem",
+                                border: "1px solid #e2e8f0",
+                                borderRadius: "0.5rem",
+                                fontSize: "1rem",
+                                backgroundColor: "#ffffff",
+                              }}
+                            >
+                              {DIFFICULTY_LEVELS.map((level) => (
+                                <option key={level} value={level}>
+                                  {level}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: "1rem" }}>
+                          <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: 500, color: "#1e293b" }}>
+                            Question Types {topic.category === "aptitude" && <span style={{ fontSize: "0.875rem", color: "#64748b", fontWeight: 400 }}>(MCQ only for aptitude)</span>}
+                          </label>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                            {(topic.category === "aptitude" ? ["MCQ"] : QUESTION_TYPES).map((type) => {
+                              // For aptitude, MCQ is always selected
+                              // For technical, check if this is the selected one (only one should be selected)
+                              const isSelected = topic.category === "aptitude" 
+                                ? type === "MCQ" 
+                                : (topic.questionTypes || []).includes(type) && (topic.questionTypes || []).length === 1 && (topic.questionTypes || [])[0] === type;
+                              return (
+                                <button
+                                  key={type}
+                                  type="button"
+                                  onClick={() => handleToggleQuestionType(topic.topic, type)}
+                                  disabled={topic.category === "aptitude"}
+                                  style={{
+                                    padding: "0.5rem 1rem",
+                                    border: `1px solid ${isSelected ? "#3b82f6" : "#e2e8f0"}`,
+                                    borderRadius: "0.5rem",
+                                    backgroundColor: isSelected ? "#eff6ff" : "#ffffff",
+                                    color: isSelected ? "#1e40af" : topic.category === "aptitude" ? "#94a3b8" : "#475569",
+                                    cursor: topic.category === "aptitude" ? "not-allowed" : "pointer",
+                                    fontSize: "0.875rem",
+                                    fontWeight: isSelected ? 600 : 400,
+                                    opacity: topic.category === "aptitude" ? 0.7 : 1,
+                                  }}
+                                >
+                                  {type}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </>
           )}
         </div>
 

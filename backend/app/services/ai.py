@@ -49,7 +49,7 @@ def _get_paragraph_requirements(difficulty: str) -> Dict[str, str]:
     return requirements.get(difficulty, requirements["Medium"])
 
 
-async def generate_topics_from_input(job_role: str, experience: str, skills: List[str]) -> List[str]:
+async def generate_topics_from_input(job_role: str, experience: str, skills: List[str], num_topics: int) -> List[str]:
     prompt = f"""
 You are an AI assistant that generates technical assessment topics.
 Based on:
@@ -57,7 +57,7 @@ Based on:
 - Experience Range: {experience}
 - Key Skills: {', '.join(skills)}
 
-Generate exactly 6 concise, relevant technical topics.
+Generate exactly {num_topics} concise, relevant technical topics.
 Output only a simple list (no explanation).
 """
 
@@ -74,7 +74,7 @@ Output only a simple list (no explanation).
     text = response.choices[0].message.content.strip() if response.choices else ""
     topics = [line.strip("- ") for line in text.splitlines() if line.strip()]
     topics = [t.split(". ", 1)[-1] if ". " in t else t for t in topics]
-    return topics[:6]
+    return topics[:num_topics]
 
 
 async def generate_questions_for_topic(topic: str, config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -103,8 +103,18 @@ async def generate_questions_for_topic(topic: str, config: Dict[str, Any]) -> Li
         for difficulty in ["Easy", "Medium", "Hard"]
     ])
 
+    # Determine if this is an aptitude topic based on topic name
+    aptitude_topics = ["Quantitative", "Logical Reasoning", "Verbal Ability", "Numerical Reasoning"]
+    is_aptitude = any(apt_topic.lower() in topic.lower() for apt_topic in aptitude_topics)
+    
+    # Check if all questions are MCQ (indicates aptitude)
+    all_mcq = all(config.get(f"Q{i}type", "") == "MCQ" for i in range(1, num_questions + 1))
+    is_aptitude = is_aptitude or all_mcq
+    
+    question_type_label = "aptitude" if is_aptitude else "technical"
+    
     prompt = f"""
-You are an expert assessment writer. Generate {num_questions} technical questions for the topic "{topic}".
+You are an expert assessment writer. Generate {num_questions} {question_type_label} questions for the topic "{topic}".
 
 QUESTION CONFIGURATION:
 {config_list}
@@ -144,11 +154,20 @@ QUESTION FORMAT REQUIREMENTS:
 
 SPECIFIC QUESTION TYPE REQUIREMENTS:
 - MCQ: Provide 4-5 plausible options. Options should test deep understanding, not just surface knowledge.
+  * For aptitude MCQ questions: Focus on numerical reasoning, logical thinking, verbal ability, or problem-solving skills. 
+    Questions should test analytical and reasoning capabilities, not technical knowledge.
+    Provide clear, well-structured multiple choice options with one correct answer.
 - Subjective: Focus on understanding, analysis, and explanation. Provide comprehensive idealAnswer.
 - Pseudo Code: Require logical thinking and algorithm design. Provide detailed expectedLogic.
 - Descriptive: Test ability to explain concepts clearly and comprehensively.
 - Aptitude: Test numerical, logical, or problem-solving abilities. Can be direct or scenario-based.
 - Reasoning: Test logical reasoning, analytical thinking, or pattern recognition. Can be direct or scenario-based.
+
+IMPORTANT FOR APTITUDE QUESTIONS:
+- If generating aptitude questions (Quantitative, Logical Reasoning, Verbal Ability, Numerical Reasoning), 
+  ALL questions MUST be MCQ format only.
+- Aptitude MCQ questions should focus on problem-solving, reasoning, and analytical skills.
+- Do NOT generate Subjective, Pseudo Code, or Descriptive questions for aptitude topics.
 
 IMPORTANT: 
 - Vary question styles - do NOT make all questions scenario-based

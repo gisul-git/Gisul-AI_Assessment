@@ -578,34 +578,43 @@ async def oauth_login(
     payload: OAuthLoginRequest,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    email = _normalize_email(payload.email)
-    user = await _find_user_by_email(db, email)
+    try:
+        email = _normalize_email(payload.email)
+        user = await _find_user_by_email(db, email)
 
-    if not user:
-        user_doc = {
-            "name": payload.name or email.split("@")[0],
-            "email": email,
-            "role": payload.role or "org_admin",
-            "provider": payload.provider,
-            "emailVerified": True,  # OAuth providers verify emails
-            "createdAt": datetime.now(timezone.utc),
-        }
-        result = await db.users.insert_one(user_doc)
-        user = await db.users.find_one({"_id": result.inserted_id})
-    else:
-        updates = {}
-        if payload.name and not user.get("name"):
-            updates["name"] = payload.name
-        if payload.role and payload.role != user.get("role"):
-            updates["role"] = payload.role
-        if payload.provider and payload.provider != user.get("provider"):
-            updates["provider"] = payload.provider
+        if not user:
+            user_doc = {
+                "name": payload.name or email.split("@")[0],
+                "email": email,
+                "role": payload.role or "org_admin",
+                "provider": payload.provider,
+                "emailVerified": True,  # OAuth providers verify emails
+                "createdAt": datetime.now(timezone.utc),
+            }
+            result = await db.users.insert_one(user_doc)
+            user = await db.users.find_one({"_id": result.inserted_id})
+        else:
+            updates = {}
+            if payload.name and not user.get("name"):
+                updates["name"] = payload.name
+            if payload.role and payload.role != user.get("role"):
+                updates["role"] = payload.role
+            if payload.provider and payload.provider != user.get("provider"):
+                updates["provider"] = payload.provider
 
-        if updates:
-            await db.users.update_one({"_id": user["_id"]}, {"$set": updates})
-            user = await db.users.find_one({"_id": user["_id"]})
+            if updates:
+                await db.users.update_one({"_id": user["_id"]}, {"$set": updates})
+                user = await db.users.find_one({"_id": user["_id"]})
 
-    if not user:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create user")
+        if not user:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create user")
 
-    return _build_login_success_response(user)
+        return _build_login_success_response(user)
+    except Exception as exc:
+        logger.error("OAuth login error: %s", exc, exc_info=True)
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"OAuth login failed: {str(exc)}"
+        ) from exc

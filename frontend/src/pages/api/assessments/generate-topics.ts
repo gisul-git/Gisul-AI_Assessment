@@ -4,9 +4,33 @@ import { authOptions } from "../auth/[...nextauth]";
 import fastApiClient from "../../../lib/fastapi";
 
 interface GenerateTopicsPayload {
-  jobRole: string;
-  experience: string;
-  skills: string[];
+  assessmentType: string[];
+  jobRole?: string;
+  experience?: string;
+  skills?: string[];
+  numTopics?: number;
+  aptitudeConfig?: {
+    quantitative?: {
+      enabled: boolean;
+      difficulty: string;
+      numQuestions: number;
+    } | null;
+    logicalReasoning?: {
+      enabled: boolean;
+      difficulty: string;
+      numQuestions: number;
+    } | null;
+    verbalAbility?: {
+      enabled: boolean;
+      difficulty: string;
+      numQuestions: number;
+    } | null;
+    numericalReasoning?: {
+      enabled: boolean;
+      difficulty: string;
+      numQuestions: number;
+    } | null;
+  };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -20,17 +44,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  const { jobRole, experience, skills } = req.body as GenerateTopicsPayload;
+  const payload = req.body as GenerateTopicsPayload;
 
-  if (!jobRole || !experience || !skills || skills.length === 0) {
-    return res.status(400).json({ message: "Job role, experience, and skills are required" });
+  // Validate assessment type
+  if (!payload.assessmentType || !Array.isArray(payload.assessmentType) || payload.assessmentType.length === 0) {
+    return res.status(400).json({ message: "At least one assessment type must be selected" });
+  }
+
+  // Validate technical fields if technical is selected
+  if (payload.assessmentType.includes("technical")) {
+    if (!payload.jobRole || !payload.experience || !payload.skills || payload.skills.length === 0) {
+      return res.status(400).json({ message: "Job role, experience, and at least one skill are required for technical assessments" });
+    }
+    if (!payload.numTopics || payload.numTopics < 1) {
+      return res.status(400).json({ message: "Number of topics is required and must be at least 1 for technical assessments" });
+    }
+  }
+
+  // Validate aptitude fields if aptitude is selected
+  if (payload.assessmentType.includes("aptitude")) {
+    if (!payload.aptitudeConfig) {
+      return res.status(400).json({ message: "Aptitude configuration is required for aptitude assessments" });
+    }
   }
 
   try {
     const token = (session as any)?.backendToken;
     const response = await fastApiClient.post(
       "/api/assessments/generate-topics",
-      { jobRole, experience, skills },
+      payload,
       {
         headers: {
           Authorization: `Bearer ${token}`,

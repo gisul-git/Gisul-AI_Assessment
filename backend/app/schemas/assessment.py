@@ -44,10 +44,32 @@ class TopicUpdate(BaseModel):
     questionConfigs: Optional[List[QuestionConfig]] = None
 
 
+class AptitudeCategoryConfig(BaseModel):
+    enabled: bool = False
+    difficulty: str = Field(default="Medium")
+    numQuestions: int = Field(default=0, ge=0)
+
+    def model_post_init(self, __context: dict[str, object]) -> None:
+        if self.difficulty not in DIFFICULTY_LEVELS:
+            raise ValueError("Invalid difficulty level")
+
+
+class AptitudeConfig(BaseModel):
+    quantitative: Optional[AptitudeCategoryConfig] = None
+    logicalReasoning: Optional[AptitudeCategoryConfig] = None
+    verbalAbility: Optional[AptitudeCategoryConfig] = None
+    numericalReasoning: Optional[AptitudeCategoryConfig] = None
+
+
 class GenerateTopicsRequest(BaseModel):
-    jobRole: str
-    experience: str
-    skills: List[str]
+    assessmentType: List[str] = Field(..., min_length=1)  # ["aptitude"], ["technical"], or ["aptitude", "technical"]
+    # Technical fields (required only if "technical" is in assessmentType)
+    jobRole: Optional[str] = None
+    experience: Optional[str] = None
+    skills: Optional[List[str]] = None
+    numTopics: Optional[int] = Field(default=None, gt=0)  # Number of topics to generate for technical assessment
+    # Aptitude fields (required only if "aptitude" is in assessmentType)
+    aptitudeConfig: Optional[AptitudeConfig] = None
 
 
 class UpdateTopicSettingsRequest(BaseModel):
