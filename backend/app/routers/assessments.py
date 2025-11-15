@@ -15,15 +15,23 @@ from ..schemas.assessment import (
     AddNewQuestionRequest,
     DeleteQuestionRequest,
     FinalizeAssessmentRequest,
+    GenerateQuestionsFromConfigRequest,
     GenerateQuestionsRequest,
+    GenerateTopicsFromSkillRequest,
     GenerateTopicsRequest,
     RemoveCustomTopicsRequest,
     ScheduleUpdateRequest,
+    TopicConfigRow,
     UpdateQuestionsRequest,
     UpdateSingleQuestionRequest,
     UpdateTopicSettingsRequest,
 )
-from ..services.ai import generate_questions_for_topic_safe, generate_topics_from_input
+from ..services.ai import (
+    generate_questions_for_topic_safe,
+    generate_topics_from_input,
+    generate_topics_from_skill,
+    get_relevant_question_types,
+)
 from ..utils.mongo import convert_object_ids, serialize_document, to_object_id
 from ..utils.responses import success_response
 
@@ -369,6 +377,160 @@ async def remove_custom_topics(
     # Serialize topics to convert ObjectIds and datetimes to JSON-serializable formats
     serialized_topics = convert_object_ids(assessment["topics"])
     return success_response("Topics removed successfully", serialized_topics)
+
+
+# New flow endpoints
+@router.post("/generate-topics-from-skill")
+async def generate_topics_from_skill_endpoint(
+    payload: GenerateTopicsFromSkillRequest,
+    current_user: Dict[str, Any] = Depends(require_editor),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Generate topics from a single skill/domain input."""
+    try:
+        topics = await generate_topics_from_skill(payload.skill, payload.experienceMin, payload.experienceMax)
+        question_types = await get_relevant_question_types(payload.skill)
+        
+        return success_response(
+            "Topics generated successfully",
+            {
+                "topics": topics,
+                "questionTypes": question_types,
+            }
+        )
+    except Exception as exc:
+        logger.error(f"Error generating topics from skill: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to generate topics") from exc
+
+
+@router.post("/create-assessment-from-skill")
+async def create_assessment_from_skill(
+    payload: GenerateTopicsFromSkillRequest,
+    current_user: Dict[str, Any] = Depends(require_editor),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Create a new assessment with topics from skill input."""
+    try:
+        topics = await generate_topics_from_skill(payload.skill, payload.experienceMin, payload.experienceMax)
+        question_types = await get_relevant_question_types(payload.skill)
+        
+        # Create assessment document
+        assessment_doc: Dict[str, Any] = {
+            "title": f"{payload.skill} Assessment",
+            "description": f"Assessment for {payload.skill} (Experience: {payload.experienceMin}-{payload.experienceMax} years)",
+            "topics": [
+                {
+                    "topic": topic,
+                    "numQuestions": 0,
+                    "questionTypes": [],
+                    "difficulty": "Medium",
+                    "source": "AI",
+                    "category": "technical",
+                    "questions": [],
+                    "questionConfigs": [],
+                }
+                for topic in topics
+            ],
+            "customTopics": topics,
+            "assessmentType": ["technical"],
+            "status": "draft",
+            "createdBy": to_object_id(current_user.get("id")),
+            "organization": to_object_id(current_user.get("organization")) if current_user.get("organization") else None,
+            "isGenerated": False,
+            "createdAt": _now_utc(),
+            "updatedAt": _now_utc(),
+            "skill": payload.skill,
+            "experienceMin": payload.experienceMin,
+            "experienceMax": payload.experienceMax,
+            "availableQuestionTypes": question_types,
+        }
+        
+        result = await db.assessments.insert_one(assessment_doc)
+        assessment_doc["_id"] = result.inserted_id
+        
+        return success_response(
+            "Assessment created successfully",
+            {
+                "assessment": serialize_document(assessment_doc),
+                "questionTypes": question_types,
+            }
+        )
+    except Exception as exc:
+        logger.error(f"Error creating assessment from skill: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to create assessment") from exc
+
+
+@router.post("/generate-questions-from-config")
+async def generate_questions_from_config(
+    payload: GenerateQuestionsFromConfigRequest,
+    current_user: Dict[str, Any] = Depends(require_editor),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Generate questions based on topic configuration."""
+    assessment = await _get_assessment(db, payload.assessmentId)
+    _check_assessment_access(assessment, current_user)
+    
+    # Update topics with configuration
+    topics_dict = {t.get("topic"): t for t in assessment.get("topics", [])}
+    
+    for topic_config in payload.topics:
+        topic_obj = topics_dict.get(topic_config.topic)
+        if topic_obj:
+            topic_obj["numQuestions"] = topic_config.numQuestions
+            topic_obj["difficulty"] = topic_config.difficulty
+            topic_obj["questionTypes"] = [topic_config.questionType]
+            
+            # Build question configs
+            question_configs = []
+            for i in range(topic_config.numQuestions):
+                question_configs.append({
+                    "questionNumber": i + 1,
+                    "type": topic_config.questionType,
+                    "difficulty": topic_config.difficulty,
+                })
+            topic_obj["questionConfigs"] = question_configs
+    
+    # Generate questions for each topic
+    all_questions = []
+    failed_topics = []
+    
+    for topic_config in payload.topics:
+        topic_obj = topics_dict.get(topic_config.topic)
+        if not topic_obj:
+            continue
+            
+        config = {
+            "numQuestions": topic_config.numQuestions,
+        }
+        for i in range(1, topic_config.numQuestions + 1):
+            config[f"Q{i}type"] = topic_config.questionType
+            config[f"Q{i}difficulty"] = topic_config.difficulty
+        
+        try:
+            questions = await generate_questions_for_topic_safe(topic_config.topic, config)
+            if questions:
+                for q in questions:
+                    q["topic"] = topic_config.topic
+                topic_obj["questions"] = questions
+                all_questions.extend(questions)
+            else:
+                failed_topics.append(topic_config.topic)
+        except Exception as exc:
+            logger.error(f"Error generating questions for topic {topic_config.topic}: {exc}")
+            failed_topics.append(topic_config.topic)
+    
+    assessment["topics"] = list(topics_dict.values())
+    assessment["skill"] = payload.skill
+    await _save_assessment(db, assessment)
+    
+    return success_response(
+        "Questions generated successfully",
+        {
+            "totalQuestions": len(all_questions),
+            "failedTopics": failed_topics,
+            "topics": convert_object_ids(assessment["topics"]),
+        }
+    )
 
 
 def _build_generation_config(topic_obj: Dict[str, Any]) -> Dict[str, Any]:

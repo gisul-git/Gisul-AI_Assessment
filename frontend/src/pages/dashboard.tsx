@@ -156,7 +156,7 @@ export default function DashboardPage() {
                 </span>
               </p>
             </div>
-            <Link href="/assessments/create" style={{ width: "100%" }}>
+            <Link href="/assessments/create-new" style={{ width: "100%" }}>
               <button type="button" className="btn-primary" style={{ marginTop: 0, width: "100%" }}>
                 + Create New Assessment
               </button>
@@ -203,7 +203,7 @@ export default function DashboardPage() {
                 Create your first assessment to get started with AI-powered topic and question
                 generation.
               </p>
-              <Link href="/assessments/create">
+              <Link href="/assessments/create-new">
                 <button type="button" className="btn-primary" style={{ marginTop: 0 }}>
                   Create Your First Assessment
                 </button>

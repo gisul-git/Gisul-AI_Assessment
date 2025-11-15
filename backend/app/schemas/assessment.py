@@ -122,6 +122,26 @@ class FinalizeAssessmentRequest(BaseModel):
     description: Optional[str] = None
 
 
+# New flow schemas
+class GenerateTopicsFromSkillRequest(BaseModel):
+    skill: str = Field(..., min_length=1)
+    experienceMin: str = Field(default="0")
+    experienceMax: str = Field(default="10")
+
+
+class TopicConfigRow(BaseModel):
+    topic: str
+    questionType: str
+    difficulty: str = Field(default="Medium")
+    numQuestions: int = Field(default=1, ge=1)
+
+
+class GenerateQuestionsFromConfigRequest(BaseModel):
+    assessmentId: str
+    skill: str
+    topics: List[TopicConfigRow]
+
+
 class ScheduleCandidateQuestions(BaseModel):
     allowed: bool = True
     maxQuestions: int = 3

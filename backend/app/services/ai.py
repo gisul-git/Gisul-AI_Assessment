@@ -79,6 +79,72 @@ Output only a simple list (no explanation).
     return topics[:num_topics]
 
 
+async def generate_topics_from_skill(skill: str, experience_min: str, experience_max: str) -> List[str]:
+    """Generate topics from a single skill/domain input."""
+    prompt = f"""
+You are an AI assistant that generates assessment topics.
+Based on:
+- Skill/Domain: {skill}
+- Experience Range: {experience_min} to {experience_max} years
+
+Generate 5-8 concise, relevant topics for this skill/domain.
+Output only a simple list (no explanation, no numbering).
+Each topic should be a single line, starting with "- " or just the topic name.
+"""
+
+    client = _get_client()
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
+    except Exception as exc:  # pragma: no cover - external API
+        raise HTTPException(status_code=500, detail="Failed to generate topics") from exc
+
+    text = response.choices[0].message.content.strip() if response.choices else ""
+    topics = [line.strip("- ") for line in text.splitlines() if line.strip()]
+    topics = [t.split(". ", 1)[-1] if ". " in t else t for t in topics]
+    # Filter out empty topics and return
+    return [t for t in topics if t.strip()]
+
+
+async def get_relevant_question_types(skill: str) -> List[str]:
+    """Determine relevant question types based on skill/domain."""
+    # Technical/coding skills that support all types including Pseudo Code
+    technical_keywords = [
+        "programming", "code", "coding", "developer", "software", "algorithm", 
+        "data structure", "python", "java", "javascript", "c++", "c#", "react", 
+        "node", "backend", "frontend", "fullstack", "database", "sql", "api",
+        "framework", "library", "git", "docker", "kubernetes", "aws", "cloud"
+    ]
+    
+    # Non-technical skills that don't need Pseudo Code
+    non_technical_keywords = [
+        "softskill", "soft skill", "communication", "leadership", "management",
+        "teamwork", "presentation", "negotiation", "sales", "marketing", "hr",
+        "human resources", "training", "coaching", "mentoring"
+    ]
+    
+    skill_lower = skill.lower()
+    
+    # Check if it's a technical skill
+    is_technical = any(keyword in skill_lower for keyword in technical_keywords)
+    
+    # Check if it's explicitly non-technical
+    is_non_technical = any(keyword in skill_lower for keyword in non_technical_keywords)
+    
+    # Default question types
+    all_types = ["MCQ", "Subjective", "Pseudo Code", "Descriptive"]
+    
+    # If it's clearly non-technical, exclude Pseudo Code
+    if is_non_technical and not is_technical:
+        return ["MCQ", "Subjective", "Descriptive"]
+    
+    # If it's technical or unclear, include all types
+    return all_types
+
+
 async def generate_questions_for_topic(topic: str, config: Dict[str, Any]) -> List[Dict[str, Any]]:
     num_questions = config.get("numQuestions")
     if not topic or not num_questions or num_questions <= 0:
