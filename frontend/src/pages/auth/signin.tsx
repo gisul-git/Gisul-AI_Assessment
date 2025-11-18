@@ -373,7 +373,7 @@ export default function SignInPage({ providers }: SignInPageProps) {
                       gap: "0.5rem",
                       backgroundColor: "#ffffff",
                       color: "#1a1625",
-                      border: "1px solid #e8e0d0",
+                      border: "1px solidrgb(216, 165, 63)",
                       borderRadius: "0.5rem",
                       fontWeight: 600,
                       cursor: "pointer",
@@ -387,7 +387,7 @@ export default function SignInPage({ providers }: SignInPageProps) {
                     }}
                   >
                     <GoogleLogo />
-                    Continue with Google
+                    Continue with a Google
                   </button>
                 )}
                 {microsoftProvider && (
