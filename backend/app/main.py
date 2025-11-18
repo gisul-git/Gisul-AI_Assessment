@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from .core.config import get_settings
 from .db.mongo import close_mongo_connection, connect_to_mongo, get_database
-from .routers import assessments, auth, users
+from .routers import assessments, auth, candidate, users
 
 settings = get_settings()
 logger = logging.getLogger("uvicorn.error")
@@ -91,4 +91,5 @@ def _now_iso() -> str:
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(assessments.router)
+app.include_router(candidate.router)
 

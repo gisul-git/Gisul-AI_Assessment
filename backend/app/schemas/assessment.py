@@ -129,6 +129,17 @@ class GenerateTopicsFromSkillRequest(BaseModel):
     experienceMax: str = Field(default="10")
 
 
+class GenerateTopicCardsRequest(BaseModel):
+    jobDesignation: str = Field(..., min_length=1)
+
+
+class CreateAssessmentFromJobDesignationRequest(BaseModel):
+    jobDesignation: str = Field(..., min_length=1)
+    selectedSkills: List[str] = Field(..., min_length=1)
+    experienceMin: str = Field(default="0")
+    experienceMax: str = Field(default="10")
+
+
 class TopicConfigRow(BaseModel):
     topic: str
     questionType: str

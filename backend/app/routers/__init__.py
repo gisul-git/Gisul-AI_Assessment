@@ -1,4 +1,4 @@
-from . import assessments, auth, users
+from . import assessments, auth, candidate, users
 
-__all__ = ["auth", "users", "assessments"]
+__all__ = ["auth", "users", "assessments", "candidate"]
 

@@ -13,10 +13,12 @@ from ..db.mongo import get_db
 from ..schemas.assessment import (
     AddCustomTopicsRequest,
     AddNewQuestionRequest,
+    CreateAssessmentFromJobDesignationRequest,
     DeleteQuestionRequest,
     FinalizeAssessmentRequest,
     GenerateQuestionsFromConfigRequest,
     GenerateQuestionsRequest,
+    GenerateTopicCardsRequest,
     GenerateTopicsFromSkillRequest,
     GenerateTopicsRequest,
     RemoveCustomTopicsRequest,
@@ -30,7 +32,10 @@ from ..services.ai import (
     generate_questions_for_topic_safe,
     generate_topics_from_input,
     generate_topics_from_skill,
+    generate_topics_from_selected_skills,
+    generate_topic_cards_from_job_designation,
     get_relevant_question_types,
+    get_relevant_question_types_from_domain,
 )
 from ..utils.mongo import convert_object_ids, serialize_document, to_object_id
 from ..utils.responses import success_response
@@ -380,6 +385,26 @@ async def remove_custom_topics(
 
 
 # New flow endpoints
+@router.post("/generate-topic-cards")
+async def generate_topic_cards_endpoint(
+    payload: GenerateTopicCardsRequest,
+    current_user: Dict[str, Any] = Depends(require_editor),
+):
+    """Generate topic cards (technologies/skills) from job designation."""
+    try:
+        cards = await generate_topic_cards_from_job_designation(payload.jobDesignation)
+        
+        return success_response(
+            "Topic cards generated successfully",
+            {
+                "cards": cards,
+            }
+        )
+    except Exception as exc:
+        logger.error(f"Error generating topic cards: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to generate topic cards") from exc
+
+
 @router.post("/generate-topics-from-skill")
 async def generate_topics_from_skill_endpoint(
     payload: GenerateTopicsFromSkillRequest,
@@ -401,6 +426,72 @@ async def generate_topics_from_skill_endpoint(
     except Exception as exc:
         logger.error(f"Error generating topics from skill: {exc}")
         raise HTTPException(status_code=500, detail="Failed to generate topics") from exc
+
+
+@router.post("/create-assessment-from-job-designation")
+async def create_assessment_from_job_designation(
+    payload: CreateAssessmentFromJobDesignationRequest,
+    current_user: Dict[str, Any] = Depends(require_editor),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Create a new assessment with topics from job designation and selected skills."""
+    try:
+        # Generate topics from selected skills
+        topics = await generate_topics_from_selected_skills(
+            payload.selectedSkills, 
+            payload.experienceMin, 
+            payload.experienceMax
+        )
+        
+        # Get question types based on the job designation/domain (AI-powered detection)
+        question_types = await get_relevant_question_types_from_domain(payload.jobDesignation)
+        
+        # Create assessment document
+        skills_str = ", ".join(payload.selectedSkills)
+        assessment_doc: Dict[str, Any] = {
+            "title": f"{payload.jobDesignation} Assessment",
+            "description": f"Assessment for {payload.jobDesignation} - Skills: {skills_str} (Experience: {payload.experienceMin}-{payload.experienceMax} years)",
+            "topics": [
+                {
+                    "topic": topic,
+                    "numQuestions": 0,
+                    "questionTypes": [question_types[0] if question_types else "Subjective"],  # Default question type
+                    "difficulty": "Medium",  # Default difficulty
+                    "source": "AI",
+                    "category": "technical",
+                    "questions": [],
+                    "questionConfigs": [],
+                }
+                for topic in topics
+            ],
+            "customTopics": topics,
+            "assessmentType": ["technical"],
+            "status": "draft",
+            "createdBy": to_object_id(current_user.get("id")),
+            "organization": to_object_id(current_user.get("organization")) if current_user.get("organization") else None,
+            "isGenerated": False,
+            "createdAt": _now_utc(),
+            "updatedAt": _now_utc(),
+            "jobDesignation": payload.jobDesignation,
+            "selectedSkills": payload.selectedSkills,
+            "experienceMin": payload.experienceMin,
+            "experienceMax": payload.experienceMax,
+            "availableQuestionTypes": question_types,
+        }
+        
+        result = await db.assessments.insert_one(assessment_doc)
+        assessment_doc["_id"] = result.inserted_id
+        
+        return success_response(
+            "Assessment created successfully",
+            {
+                "assessment": serialize_document(assessment_doc),
+                "questionTypes": question_types,
+            }
+        )
+    except Exception as exc:
+        logger.error(f"Error creating assessment from job designation: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to create assessment") from exc
 
 
 @router.post("/create-assessment-from-skill")
@@ -864,6 +955,40 @@ async def get_assessment_schedule(
     return success_response("Assessment schedule fetched successfully", data)
 
 
+@router.post("/update-schedule-and-candidates")
+async def update_schedule_and_candidates(
+    payload: Dict[str, Any],
+    current_user: Dict[str, Any] = Depends(require_editor),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Update assessment schedule and candidates."""
+    assessment_id = payload.get("assessmentId")
+    if not assessment_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Assessment ID is required")
+    
+    assessment = await _get_assessment(db, assessment_id)
+    _check_assessment_access(assessment, current_user)
+
+    # Update schedule
+    schedule = {
+        "startTime": payload.get("startTime"),
+        "endTime": payload.get("endTime"),
+        "timezone": "Asia/Kolkata",  # IST
+    }
+    assessment["schedule"] = schedule
+
+    # Update candidates
+    candidates = payload.get("candidates", [])
+    assessment["candidates"] = candidates
+
+    # Update assessment URL and token
+    assessment["assessmentUrl"] = payload.get("assessmentUrl")
+    assessment["assessmentToken"] = payload.get("token")
+
+    await _save_assessment(db, assessment)
+    return success_response("Schedule and candidates updated successfully", serialize_document(assessment))
+
+
 @router.put("/{assessment_id}/update-schedule")
 async def update_assessment_schedule(
     assessment_id: str,
@@ -1095,4 +1220,6 @@ async def delete_assessment(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete assessment: {str(exc)}",
         ) from exc
+
+
 

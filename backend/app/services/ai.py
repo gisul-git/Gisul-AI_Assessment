@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from functools import lru_cache
 from typing import Any, Dict, List
@@ -14,6 +15,8 @@ except ImportError as exc:  # pragma: no cover - optional dependency guard
     raise RuntimeError("The openai package is required. Ensure it is installed.") from exc
 
 from ..core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 _enrichment_cache: Dict[str, str] = {}
 
@@ -79,6 +82,72 @@ Output only a simple list (no explanation).
     return topics[:num_topics]
 
 
+async def generate_topic_cards_from_job_designation(job_designation: str) -> List[str]:
+    """Generate technology/skill cards from job designation."""
+    prompt = f"""
+You are an AI assistant that generates relevant technology and skill names for a job designation.
+Based on the job designation: {job_designation}
+
+Generate 8-12 relevant technology names, programming languages, frameworks, or tools that are commonly associated with this job role.
+Output only a simple list of technology names (no explanation, no numbering, no descriptions).
+Each technology should be a single word or short phrase (e.g., "Python", "JavaScript", "React", "Node.js", "HTML", "CSS").
+Output only the technology names, one per line.
+"""
+
+    client = _get_client()
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
+    except Exception as exc:  # pragma: no cover - external API
+        raise HTTPException(status_code=500, detail="Failed to generate topic cards") from exc
+
+    text = response.choices[0].message.content.strip() if response.choices else ""
+    cards = [line.strip("- ") for line in text.splitlines() if line.strip()]
+    cards = [c.split(". ", 1)[-1] if ". " in c else c for c in cards]
+    # Filter out empty cards and return unique values
+    unique_cards = list(dict.fromkeys([c.strip() for c in cards if c.strip()]))
+    return unique_cards[:12]  # Limit to 12 cards
+
+
+async def generate_topics_from_selected_skills(skills: List[str], experience_min: str, experience_max: str) -> List[str]:
+    """Generate topics from multiple selected skills/technologies."""
+    if not skills:
+        return []
+    
+    skills_list = ", ".join(skills)
+    prompt = f"""
+You are an AI assistant that generates assessment topics.
+Based on:
+- Selected Skills/Technologies: {skills_list}
+- Experience Range: {experience_min} to {experience_max} years
+
+Generate 5-8 concise, relevant topics for each selected skill/technology.
+If multiple skills are provided, generate topics that cover all of them.
+Output only a simple list (no explanation, no numbering).
+Each topic should be a single line, starting with "- " or just the topic name.
+Make sure topics are specific to the selected skills.
+"""
+
+    client = _get_client()
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
+    except Exception as exc:  # pragma: no cover - external API
+        raise HTTPException(status_code=500, detail="Failed to generate topics") from exc
+
+    text = response.choices[0].message.content.strip() if response.choices else ""
+    topics = [line.strip("- ") for line in text.splitlines() if line.strip()]
+    topics = [t.split(". ", 1)[-1] if ". " in t else t for t in topics]
+    # Filter out empty topics and return
+    return [t for t in topics if t.strip()]
+
+
 async def generate_topics_from_skill(skill: str, experience_min: str, experience_max: str) -> List[str]:
     """Generate topics from a single skill/domain input."""
     prompt = f"""
@@ -109,8 +178,61 @@ Each topic should be a single line, starting with "- " or just the topic name.
     return [t for t in topics if t.strip()]
 
 
+async def get_relevant_question_types_from_domain(domain: str) -> List[str]:
+    """Determine relevant question types based on domain/designation using AI."""
+    if not domain or not domain.strip():
+        return ["MCQ", "Subjective", "Descriptive"]
+    
+    prompt = f"""
+You are an AI assistant that determines appropriate question types for assessments.
+Based on the domain/designation: "{domain}"
+
+Determine if this domain requires programming/coding skills (like software development, computer science, etc.) or not.
+
+Question types available:
+- MCQ: Multiple Choice Questions (suitable for all domains)
+- Subjective: Open-ended questions requiring explanation (suitable for all domains)
+- Pseudo Code: Algorithm design and logical problem-solving (ONLY for programming/coding domains)
+- Descriptive: Detailed explanation questions (suitable for all domains)
+
+Rules:
+1. If the domain is related to programming, software development, computer science, coding, algorithms, or software engineering → Include ALL types: MCQ, Subjective, Pseudo Code, Descriptive
+2. If the domain is NOT programming-related (e.g., Mechanical Engineering, Civil Engineering, Aptitude, Soft Skills, etc.) → Exclude Pseudo Code: MCQ, Subjective, Descriptive
+
+Respond with ONLY a comma-separated list of question types (e.g., "MCQ, Subjective, Descriptive" or "MCQ, Subjective, Pseudo Code, Descriptive").
+Do not include any explanation, just the list.
+"""
+
+    client = _get_client()
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,  # Lower temperature for more consistent results
+        )
+    except Exception as exc:  # pragma: no cover - external API
+        # Fallback to safe defaults if AI fails
+        logger.warning(f"Failed to get question types from AI, using fallback: {exc}")
+        return ["MCQ", "Subjective", "Descriptive"]
+    
+    text = response.choices[0].message.content.strip() if response.choices else ""
+    
+    # Parse the response
+    question_types = [qt.strip() for qt in text.split(",") if qt.strip()]
+    
+    # Validate question types
+    valid_types = {"MCQ", "Subjective", "Pseudo Code", "Descriptive"}
+    filtered_types = [qt for qt in question_types if qt in valid_types]
+    
+    # If no valid types found, return safe defaults
+    if not filtered_types:
+        return ["MCQ", "Subjective", "Descriptive"]
+    
+    return filtered_types
+
+
 async def get_relevant_question_types(skill: str) -> List[str]:
-    """Determine relevant question types based on skill/domain."""
+    """Determine relevant question types based on skill/domain (legacy function for backward compatibility)."""
     # Technical/coding skills that support all types including Pseudo Code
     technical_keywords = [
         "programming", "code", "coding", "developer", "software", "algorithm", 

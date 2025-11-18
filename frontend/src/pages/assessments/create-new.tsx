@@ -16,9 +16,12 @@ interface Topic {
 export default function CreateNewAssessmentPage() {
   const router = useRouter();
   const [currentStation, setCurrentStation] = useState(1);
-  const [skill, setSkill] = useState("");
+  const [jobDesignation, setJobDesignation] = useState("");
+  const [topicCards, setTopicCards] = useState<string[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [manualSkillInput, setManualSkillInput] = useState("");
+  const [loadingCards, setLoadingCards] = useState(false);
   const [topics, setTopics] = useState<string[]>([]);
-  const [customTopic, setCustomTopic] = useState("");
   const [experienceMin, setExperienceMin] = useState(0);
   const [experienceMax, setExperienceMax] = useState(10);
   const [availableQuestionTypes, setAvailableQuestionTypes] = useState<string[]>(QUESTION_TYPES);
@@ -30,6 +33,12 @@ export default function CreateNewAssessmentPage() {
   const [error, setError] = useState<string | null>(null);
   const [finalTitle, setFinalTitle] = useState("");
   const [finalDescription, setFinalDescription] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [candidates, setCandidates] = useState<Array<{ email: string; name: string }>>([]);
+  const [candidateEmail, setCandidateEmail] = useState("");
+  const [candidateName, setCandidateName] = useState("");
+  const [assessmentUrl, setAssessmentUrl] = useState<string | null>(null);
 
   const sliderRef = useRef<HTMLDivElement>(null);
   const minHandleRef = useRef<HTMLDivElement>(null);
@@ -122,9 +131,53 @@ export default function CreateNewAssessmentPage() {
     };
   }, []);
 
+  const handleGenerateTopicCards = async () => {
+    if (!jobDesignation.trim()) {
+      setError("Please enter a job designation");
+      return;
+    }
+
+    setLoadingCards(true);
+    setError(null);
+
+    try {
+      const response = await axios.post("/api/assessments/generate-topic-cards", {
+        jobDesignation: jobDesignation.trim(),
+      });
+
+      if (response.data?.success) {
+        setTopicCards(response.data.data.cards || []);
+      } else {
+        setError("Failed to generate topic cards");
+      }
+    } catch (err: any) {
+      console.error("Error generating topic cards:", err);
+      setError(err.response?.data?.message || err.message || "Failed to generate topic cards");
+    } finally {
+      setLoadingCards(false);
+    }
+  };
+
+  const handleCardClick = (card: string) => {
+    if (!selectedSkills.includes(card)) {
+      setSelectedSkills([...selectedSkills, card]);
+    }
+  };
+
+  const handleAddManualSkill = () => {
+    if (manualSkillInput.trim() && !selectedSkills.includes(manualSkillInput.trim())) {
+      setSelectedSkills([...selectedSkills, manualSkillInput.trim()]);
+      setManualSkillInput("");
+    }
+  };
+
+  const handleRemoveSkill = (skillToRemove: string) => {
+    setSelectedSkills(selectedSkills.filter((s) => s !== skillToRemove));
+  };
+
   const handleGenerateTopics = async () => {
-    if (!skill.trim()) {
-      setError("Please enter a skill/domain");
+    if (selectedSkills.length === 0) {
+      setError("Please select at least one skill to assess");
       return;
     }
 
@@ -132,8 +185,9 @@ export default function CreateNewAssessmentPage() {
     setError(null);
 
     try {
-      const response = await axios.post("/api/assessments/create-from-skill", {
-        skill: skill.trim(),
+      const response = await axios.post("/api/assessments/create-from-job-designation", {
+        jobDesignation: jobDesignation.trim(),
+        selectedSkills: selectedSkills,
         experienceMin: experienceMin.toString(),
         experienceMax: experienceMax.toString(),
       });
@@ -146,8 +200,8 @@ export default function CreateNewAssessmentPage() {
         setTopicConfigs(
           data.assessment.topics.map((t: any) => ({
             topic: t.topic,
-            questionType: data.questionTypes?.[0] || QUESTION_TYPES[0],
-            difficulty: "Medium",
+            questionType: t.questionTypes?.[0] || data.questionTypes?.[0] || QUESTION_TYPES[0], // Use default from backend
+            difficulty: t.difficulty || "Medium", // Use default from backend
             numQuestions: 1,
           }))
         );
@@ -162,36 +216,30 @@ export default function CreateNewAssessmentPage() {
     }
   };
 
-  const handleAddCustomTopic = () => {
-    if (customTopic.trim() && !topics.includes(customTopic.trim())) {
-      setTopics([...topics, customTopic.trim()]);
-      setTopicConfigs([
-        ...topicConfigs,
-        {
-          topic: customTopic.trim(),
-          questionType: availableQuestionTypes[0],
-          difficulty: "Medium",
-          numQuestions: 1,
-        },
-      ]);
-      setCustomTopic("");
-    }
+
+  const handleUpdateTopicConfig = (index: number, field: keyof Topic, value: any) => {
+    const updated = [...topicConfigs];
+    updated[index] = { ...updated[index], [field]: value };
+    setTopicConfigs(updated);
   };
 
-  const handleRemoveTopic = (topicToRemove: string) => {
-    setTopics(topics.filter((t) => t !== topicToRemove));
-    setTopicConfigs(topicConfigs.filter((tc) => tc.topic !== topicToRemove));
+  const handleAddNewTopic = () => {
+    const newTopic: Topic = {
+      topic: "",
+      questionType: availableQuestionTypes[0] || QUESTION_TYPES[0],
+      difficulty: "Medium",
+      numQuestions: 1,
+    };
+    setTopicConfigs([...topicConfigs, newTopic]);
   };
 
-  const handleUpdateTopicConfig = (topic: string, field: keyof Topic, value: any) => {
-    setTopicConfigs(
-      topicConfigs.map((tc) => (tc.topic === topic ? { ...tc, [field]: value } : tc))
-    );
+  const handleRemoveTopic = (index: number) => {
+    setTopicConfigs(topicConfigs.filter((_, i) => i !== index));
   };
 
   const handleNextToStation2 = () => {
     if (topics.length === 0) {
-      setError("Please add at least one topic");
+      setError("Please generate topics first");
       return;
     }
     setError(null);
@@ -204,7 +252,14 @@ export default function CreateNewAssessmentPage() {
       return;
     }
 
-    const invalidConfigs = topicConfigs.filter(
+    // Filter out topics with empty names
+    const validConfigs = topicConfigs.filter((tc) => tc.topic.trim() !== "");
+    if (validConfigs.length === 0) {
+      setError("Please enter at least one topic name");
+      return;
+    }
+
+    const invalidConfigs = validConfigs.filter(
       (tc) => !tc.questionType || !tc.difficulty || tc.numQuestions < 1
     );
     if (invalidConfigs.length > 0) {
@@ -212,13 +267,16 @@ export default function CreateNewAssessmentPage() {
       return;
     }
 
+    // Update topicConfigs to only include valid topics
+    setTopicConfigs(validConfigs);
+
     setGenerating(true);
     setError(null);
 
     try {
       const response = await axios.post("/api/assessments/generate-questions-from-config", {
         assessmentId,
-        skill: skill.trim(),
+        skill: selectedSkills.join(", "),
         topics: topicConfigs,
       });
 
@@ -244,6 +302,59 @@ export default function CreateNewAssessmentPage() {
 
   const handleRemoveQuestion = (questionIndex: number) => {
     setQuestions(questions.filter((_, idx) => idx !== questionIndex));
+  };
+
+  const handleAddCandidate = () => {
+    if (candidateEmail.trim() && candidateName.trim()) {
+      // Check if email already exists
+      if (candidates.some((c) => c.email.toLowerCase() === candidateEmail.trim().toLowerCase())) {
+        setError("This email is already added");
+        return;
+      }
+      setCandidates([...candidates, { email: candidateEmail.trim(), name: candidateName.trim() }]);
+      setCandidateEmail("");
+      setCandidateName("");
+      setError(null);
+    }
+  };
+
+  const handleRemoveCandidate = (email: string) => {
+    setCandidates(candidates.filter((c) => c.email !== email));
+  };
+
+  const handleGenerateUrl = async () => {
+    if (!assessmentId) {
+      setError("Assessment ID not found");
+      return;
+    }
+
+    // Generate unique URL - using assessment ID and a random token
+    const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    const url = `${window.location.origin}/assessment/${assessmentId}/${token}`;
+    setAssessmentUrl(url);
+
+    // Save schedule and candidates to backend
+    try {
+      await axios.post("/api/assessments/update-schedule-and-candidates", {
+        assessmentId,
+        startTime,
+        endTime,
+        candidates,
+        assessmentUrl: url,
+        token,
+      });
+    } catch (err: any) {
+      console.error("Error saving schedule and candidates:", err);
+      setError("Failed to save schedule and candidates");
+    }
+  };
+
+  const handleCopyUrl = () => {
+    if (assessmentUrl) {
+      navigator.clipboard.writeText(assessmentUrl);
+      // You could show a toast notification here
+      alert("URL copied to clipboard!");
+    }
   };
 
   const handleFinalize = async () => {
@@ -288,7 +399,7 @@ export default function CreateNewAssessmentPage() {
       });
 
       if (response.data?.success) {
-        router.push("/dashboard");
+        setCurrentStation(4);
       } else {
         setError("Failed to finalize assessment");
       }
@@ -347,14 +458,14 @@ export default function CreateNewAssessmentPage() {
                   position: "absolute",
                   top: "50%",
                   left: 0,
-                  width: currentStation >= 2 ? "50%" : currentStation >= 3 ? "100%" : "0%",
+                  width: currentStation >= 2 ? "25%" : currentStation >= 3 ? "50%" : currentStation >= 4 ? "75%" : currentStation >= 5 ? "100%" : "0%",
                   height: "3px",
                   backgroundColor: "#6953a3",
                   zIndex: 1,
                   transition: "width 0.3s ease",
                 }}
               />
-              {[1, 2, 3].map((station) => (
+              {[1, 2, 3, 4, 5].map((station) => (
                 <div
                   key={station}
                   style={{
@@ -391,7 +502,7 @@ export default function CreateNewAssessmentPage() {
                       fontWeight: currentStation >= station ? 600 : 400,
                     }}
                   >
-                    {station === 1 ? "Topics" : station === 2 ? "Configure" : "Review"}
+                    {station === 1 ? "Topics" : station === 2 ? "Configure" : station === 3 ? "Review" : station === 4 ? "Schedule" : "Candidates"}
                   </span>
                 </div>
               ))}
@@ -411,31 +522,148 @@ export default function CreateNewAssessmentPage() {
                 Create Assessment
               </h1>
               <p style={{ color: "#6b6678", marginBottom: "2rem", fontSize: "1rem" }}>
-                Enter a skill or domain to generate relevant topics
+                Enter a job designation or domain to get started
               </p>
 
               <div style={{ marginBottom: "2rem" }}>
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: 600, color: "#1e293b" }}>
-                  Skill/Domain *
+                  Job Designation / Domain *
                 </label>
-                <input
-                  type="text"
-                  value={skill}
-                  onChange={(e) => setSkill(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === "Enter" && skill.trim()) {
-                      handleGenerateTopics();
-                    }
-                  }}
-                  placeholder="e.g., Python, Java, Softskill, Communication"
-                  style={{
-                    width: "100%",
-                    padding: "0.75rem",
-                    border: "1px solid #e2e8f0",
-                    borderRadius: "0.5rem",
-                    fontSize: "1rem",
-                  }}
-                />
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <input
+                    type="text"
+                    value={jobDesignation}
+                    onChange={(e) => setJobDesignation(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === "Enter" && jobDesignation.trim()) {
+                        handleGenerateTopicCards();
+                      }
+                    }}
+                    placeholder="e.g., Software Engineering, Aptitude, Data Scientist, Frontend Developer"
+                    style={{
+                      flex: 1,
+                      padding: "0.75rem",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "0.5rem",
+                      fontSize: "1rem",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleGenerateTopicCards}
+                    className="btn-primary"
+                    disabled={loadingCards || !jobDesignation.trim()}
+                    style={{ marginTop: 0, whiteSpace: "nowrap", padding: "0.75rem 1.5rem" }}
+                  >
+                    {loadingCards ? "Loading..." : "Get Skills"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Topic Cards Display */}
+              {topicCards.length > 0 && (
+                <div style={{ marginBottom: "2rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.75rem", fontWeight: 600, color: "#1e293b" }}>
+                    Related Technologies & Skills
+                  </label>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
+                    {topicCards.map((card) => (
+                      <button
+                        key={card}
+                        type="button"
+                        onClick={() => handleCardClick(card)}
+                        disabled={selectedSkills.includes(card)}
+                        style={{
+                          padding: "0.5rem 1rem",
+                          border: `1px solid ${selectedSkills.includes(card) ? "#6953a3" : "#e2e8f0"}`,
+                          borderRadius: "0.5rem",
+                          backgroundColor: selectedSkills.includes(card) ? "#eff6ff" : "#ffffff",
+                          color: selectedSkills.includes(card) ? "#1e40af" : "#475569",
+                          cursor: selectedSkills.includes(card) ? "default" : "pointer",
+                          fontSize: "0.875rem",
+                          fontWeight: selectedSkills.includes(card) ? 600 : 400,
+                          opacity: selectedSkills.includes(card) ? 0.7 : 1,
+                        }}
+                      >
+                        {card} {selectedSkills.includes(card) && "✓"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Skills we want to assess section */}
+              <div style={{ marginBottom: "2rem" }}>
+                <label style={{ display: "block", marginBottom: "0.75rem", fontWeight: 600, color: "#1e293b" }}>
+                  Skills we want to assess *
+                </label>
+                {selectedSkills.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginBottom: "1rem" }}>
+                    {selectedSkills.map((skill) => (
+                      <div
+                        key={skill}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                          backgroundColor: "#eff6ff",
+                          color: "#1e40af",
+                          padding: "0.5rem 1rem",
+                          borderRadius: "0.5rem",
+                          fontSize: "0.875rem",
+                          fontWeight: 500,
+                        }}
+                      >
+                        {skill}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSkill(skill)}
+                          style={{
+                            background: "none",
+                            border: "none",
+                            color: "#1e40af",
+                            cursor: "pointer",
+                            padding: 0,
+                            fontSize: "1.125rem",
+                            lineHeight: 1,
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <input
+                    type="text"
+                    value={manualSkillInput}
+                    onChange={(e) => setManualSkillInput(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddManualSkill();
+                      }
+                    }}
+                    placeholder="Enter technology name (e.g., Python, React, HTML)"
+                    style={{
+                      flex: 1,
+                      padding: "0.75rem",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "0.5rem",
+                      fontSize: "1rem",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddManualSkill}
+                    className="btn-secondary"
+                    disabled={!manualSkillInput.trim()}
+                    style={{ marginTop: 0, whiteSpace: "nowrap", padding: "0.75rem 1.5rem" }}
+                  >
+                    Add
+                  </button>
+                </div>
               </div>
 
               <div style={{ marginBottom: "2rem" }}>
@@ -497,94 +725,16 @@ export default function CreateNewAssessmentPage() {
                 </div>
               </div>
 
-              {topics.length > 0 && (
-                <div style={{ marginBottom: "2rem" }}>
-                  <label style={{ display: "block", marginBottom: "0.75rem", fontWeight: 600, color: "#1e293b" }}>
-                    Topics
-                  </label>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginBottom: "1rem" }}>
-                    {topics.map((topic) => (
-                      <div
-                        key={topic}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "0.5rem",
-                          backgroundColor: "#eff6ff",
-                          color: "#1e40af",
-                          padding: "0.5rem 1rem",
-                          borderRadius: "0.5rem",
-                          fontSize: "0.875rem",
-                          fontWeight: 500,
-                        }}
-                      >
-                        {topic}
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveTopic(topic)}
-                          style={{
-                            background: "none",
-                            border: "none",
-                            color: "#1e40af",
-                            cursor: "pointer",
-                            padding: 0,
-                            fontSize: "1.125rem",
-                            lineHeight: 1,
-                          }}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div style={{ marginBottom: "2rem" }}>
-                <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: 600, color: "#1e293b" }}>
-                  Add Custom Topic
-                </label>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
-                  <input
-                    type="text"
-                    value={customTopic}
-                    onChange={(e) => setCustomTopic(e.target.value)}
-                    onKeyPress={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleAddCustomTopic();
-                      }
-                    }}
-                    placeholder="Enter custom topic"
-                    style={{
-                      flex: 1,
-                      padding: "0.75rem",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "0.5rem",
-                      fontSize: "1rem",
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAddCustomTopic}
-                    className="btn-secondary"
-                    disabled={!customTopic.trim()}
-                    style={{ marginTop: 0, whiteSpace: "nowrap", padding: "0.75rem 1.5rem" }}
-                  >
-                    Add
-                  </button>
-                </div>
-              </div>
 
               <div style={{ display: "flex", gap: "1rem", marginTop: "2rem" }}>
                 <button
                   type="button"
                   onClick={handleGenerateTopics}
                   className="btn-primary"
-                  disabled={loading || !skill.trim()}
+                  disabled={loading || selectedSkills.length === 0}
                   style={{ flex: 1 }}
                 >
-                  {loading ? "Generating..." : "Generate Topics"}
+                  {loading ? "Generating Topics..." : "Generate Topics"}
                 </button>
                 {topics.length > 0 && (
                   <button type="button" onClick={handleNextToStation2} className="btn-primary" style={{ flex: 1 }}>
@@ -602,10 +752,10 @@ export default function CreateNewAssessmentPage() {
                 Configure Topics
               </h1>
               <p style={{ color: "#6b6678", marginBottom: "2rem", fontSize: "1rem" }}>
-                Configure question type, difficulty, and number of questions for each topic
+                Configure question type, difficulty, and number of questions for each topic. You can also add your own topics.
               </p>
 
-              <div style={{ overflowX: "auto", marginBottom: "2rem" }}>
+              <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ backgroundColor: "#f8fafc" }}>
@@ -621,16 +771,33 @@ export default function CreateNewAssessmentPage() {
                       <th style={{ padding: "1rem", textAlign: "left", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
                         Number of Questions
                       </th>
+                      <th style={{ padding: "1rem", textAlign: "left", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
+                        Actions
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {topicConfigs.map((config, index) => (
                       <tr key={index} style={{ borderBottom: "1px solid #e2e8f0" }}>
-                        <td style={{ padding: "1rem" }}>{config.topic}</td>
+                        <td style={{ padding: "1rem" }}>
+                          <input
+                            type="text"
+                            value={config.topic}
+                            onChange={(e) => handleUpdateTopicConfig(index, "topic", e.target.value)}
+                            placeholder="Enter topic name"
+                            style={{
+                              width: "100%",
+                              padding: "0.5rem",
+                              border: "1px solid #e2e8f0",
+                              borderRadius: "0.5rem",
+                              fontSize: "0.875rem",
+                            }}
+                          />
+                        </td>
                         <td style={{ padding: "1rem" }}>
                           <select
                             value={config.questionType}
-                            onChange={(e) => handleUpdateTopicConfig(config.topic, "questionType", e.target.value)}
+                            onChange={(e) => handleUpdateTopicConfig(index, "questionType", e.target.value)}
                             style={{
                               width: "100%",
                               padding: "0.5rem",
@@ -649,7 +816,7 @@ export default function CreateNewAssessmentPage() {
                         <td style={{ padding: "1rem" }}>
                           <select
                             value={config.difficulty}
-                            onChange={(e) => handleUpdateTopicConfig(config.topic, "difficulty", e.target.value)}
+                            onChange={(e) => handleUpdateTopicConfig(index, "difficulty", e.target.value)}
                             style={{
                               width: "100%",
                               padding: "0.5rem",
@@ -672,7 +839,7 @@ export default function CreateNewAssessmentPage() {
                             max="20"
                             value={config.numQuestions}
                             onChange={(e) =>
-                              handleUpdateTopicConfig(config.topic, "numQuestions", parseInt(e.target.value) || 1)
+                              handleUpdateTopicConfig(index, "numQuestions", parseInt(e.target.value) || 1)
                             }
                             style={{
                               width: "100%",
@@ -683,10 +850,37 @@ export default function CreateNewAssessmentPage() {
                             }}
                           />
                         </td>
+                        <td style={{ padding: "1rem" }}>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveTopic(index)}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              color: "#ef4444",
+                              cursor: "pointer",
+                              fontSize: "0.875rem",
+                              padding: "0.25rem 0.5rem",
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              <div style={{ marginBottom: "2rem", display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={handleAddNewTopic}
+                  className="btn-secondary"
+                  style={{ marginTop: 0 }}
+                >
+                  + Add Skill
+                </button>
               </div>
 
               <div style={{ display: "flex", gap: "1rem", marginTop: "2rem" }}>
@@ -879,6 +1073,290 @@ export default function CreateNewAssessmentPage() {
                     {loading ? "Finalizing..." : "Finalize Assessment"}
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Station 4: Schedule Exam */}
+          {currentStation === 4 && (
+            <div>
+              <h1 style={{ marginBottom: "0.5rem", fontSize: "2rem", color: "#1a1625", fontWeight: 700 }}>
+                Schedule Exam
+              </h1>
+              <p style={{ color: "#6b6678", marginBottom: "2rem", fontSize: "1rem" }}>
+                Set the start and end time for the assessment (Indian Standard Time - IST)
+              </p>
+
+              <div style={{ marginBottom: "2rem" }}>
+                <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: 600, color: "#1e293b" }}>
+                  Start Time (IST) *
+                </label>
+                <input
+                  type="datetime-local"
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                  required
+                  style={{
+                    width: "100%",
+                    padding: "0.75rem",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: "0.5rem",
+                    fontSize: "1rem",
+                  }}
+                />
+                <p style={{ fontSize: "0.875rem", color: "#64748b", marginTop: "0.5rem" }}>
+                  Indian Standard Time (IST) - UTC+5:30
+                </p>
+              </div>
+
+              <div style={{ marginBottom: "2rem" }}>
+                <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: 600, color: "#1e293b" }}>
+                  End Time (IST) *
+                </label>
+                <input
+                  type="datetime-local"
+                  value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)}
+                  required
+                  style={{
+                    width: "100%",
+                    padding: "0.75rem",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: "0.5rem",
+                    fontSize: "1rem",
+                  }}
+                />
+                <p style={{ fontSize: "0.875rem", color: "#64748b", marginTop: "0.5rem" }}>
+                  Indian Standard Time (IST) - UTC+5:30
+                </p>
+              </div>
+
+              <div style={{ display: "flex", gap: "1rem", marginTop: "2rem" }}>
+                <button
+                  type="button"
+                  onClick={() => setCurrentStation(3)}
+                  className="btn-secondary"
+                  style={{ flex: 1 }}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!startTime || !endTime) {
+                      setError("Please set both start and end time");
+                      return;
+                    }
+                    if (new Date(startTime) >= new Date(endTime)) {
+                      setError("End time must be after start time");
+                      return;
+                    }
+                    setError(null);
+                    setCurrentStation(5);
+                  }}
+                  className="btn-primary"
+                  style={{ flex: 1 }}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Station 5: Add Candidates */}
+          {currentStation === 5 && (
+            <div>
+              <h1 style={{ marginBottom: "0.5rem", fontSize: "2rem", color: "#1a1625", fontWeight: 700 }}>
+                Add Candidates
+              </h1>
+              <p style={{ color: "#6b6678", marginBottom: "2rem", fontSize: "1rem" }}>
+                Add candidates who will take this assessment. A unique URL will be generated for all candidates.
+              </p>
+
+              <div style={{ marginBottom: "2rem" }}>
+                <label style={{ display: "block", marginBottom: "0.75rem", fontWeight: 600, color: "#1e293b" }}>
+                  Add Candidate
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: "0.5rem", marginBottom: "1rem" }}>
+                  <input
+                    type="email"
+                    value={candidateEmail}
+                    onChange={(e) => setCandidateEmail(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddCandidate();
+                      }
+                    }}
+                    placeholder="Candidate Email"
+                    style={{
+                      padding: "0.75rem",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "0.5rem",
+                      fontSize: "1rem",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={candidateName}
+                    onChange={(e) => setCandidateName(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddCandidate();
+                      }
+                    }}
+                    placeholder="Candidate Name"
+                    style={{
+                      padding: "0.75rem",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "0.5rem",
+                      fontSize: "1rem",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddCandidate}
+                    className="btn-secondary"
+                    disabled={!candidateEmail.trim() || !candidateName.trim()}
+                    style={{ marginTop: 0, whiteSpace: "nowrap", padding: "0.75rem 1.5rem" }}
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              {candidates.length > 0 && (
+                <div style={{ marginBottom: "2rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.75rem", fontWeight: 600, color: "#1e293b" }}>
+                    Added Candidates ({candidates.length})
+                  </label>
+                  <div style={{ border: "1px solid #e2e8f0", borderRadius: "0.75rem", overflow: "hidden" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ backgroundColor: "#f8fafc" }}>
+                          <th style={{ padding: "1rem", textAlign: "left", borderBottom: "1px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
+                            Email
+                          </th>
+                          <th style={{ padding: "1rem", textAlign: "left", borderBottom: "1px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
+                            Name
+                          </th>
+                          <th style={{ padding: "1rem", textAlign: "left", borderBottom: "1px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
+                            Actions
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {candidates.map((candidate, index) => (
+                          <tr key={index} style={{ borderBottom: "1px solid #e2e8f0" }}>
+                            <td style={{ padding: "1rem" }}>{candidate.email}</td>
+                            <td style={{ padding: "1rem" }}>{candidate.name}</td>
+                            <td style={{ padding: "1rem" }}>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveCandidate(candidate.email)}
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "#ef4444",
+                                  cursor: "pointer",
+                                  fontSize: "0.875rem",
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {!assessmentUrl && (
+                <div style={{ marginBottom: "2rem" }}>
+                  <button
+                    type="button"
+                    onClick={handleGenerateUrl}
+                    className="btn-primary"
+                    disabled={candidates.length === 0}
+                    style={{ width: "100%" }}
+                  >
+                    Generate Assessment URL
+                  </button>
+                </div>
+              )}
+
+              {assessmentUrl && (
+                <div style={{ marginBottom: "2rem", padding: "1.5rem", backgroundColor: "#f8fafc", borderRadius: "0.75rem", border: "1px solid #e2e8f0" }}>
+                  <label style={{ display: "block", marginBottom: "0.75rem", fontWeight: 600, color: "#1e293b" }}>
+                    Assessment URL
+                  </label>
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <input
+                      type="text"
+                      value={assessmentUrl}
+                      readOnly
+                      style={{
+                        flex: 1,
+                        padding: "0.75rem",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: "0.5rem",
+                        fontSize: "1rem",
+                        backgroundColor: "#ffffff",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCopyUrl}
+                      className="btn-secondary"
+                      style={{ marginTop: 0, whiteSpace: "nowrap", padding: "0.75rem 1.5rem" }}
+                    >
+                      Copy URL
+                    </button>
+                  </div>
+                  <p style={{ fontSize: "0.875rem", color: "#64748b", marginTop: "0.5rem" }}>
+                    Share this URL with all candidates. They will use it to access the assessment.
+                  </p>
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: "1rem", marginTop: "2rem" }}>
+                <button
+                  type="button"
+                  onClick={() => setCurrentStation(4)}
+                  className="btn-secondary"
+                  style={{ flex: 1 }}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!assessmentUrl) {
+                      setError("Please generate the assessment URL first");
+                      return;
+                    }
+                    if (candidates.length === 0) {
+                      setError("Please add at least one candidate");
+                      return;
+                    }
+                    setError(null);
+                    // Save and redirect to dashboard
+                    try {
+                      await handleGenerateUrl();
+                      router.push("/dashboard");
+                    } catch (err: any) {
+                      setError("Failed to save. Please try again.");
+                    }
+                  }}
+                  className="btn-primary"
+                  disabled={!assessmentUrl || candidates.length === 0}
+                  style={{ flex: 1 }}
+                >
+                  Complete
+                </button>
               </div>
             </div>
           )}
