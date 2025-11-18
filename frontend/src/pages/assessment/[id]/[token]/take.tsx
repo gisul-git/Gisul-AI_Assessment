@@ -159,11 +159,12 @@ export default function CandidateAssessmentPage() {
     if (!currentQuestionType || typeTimeRemaining <= 0 || timeStatus !== "active" || completedTypes.has(currentQuestionType)) return;
     
     const typeTimer = setInterval(() => {
-      setTypeTimeRemaining(prev => {
+          setTypeTimeRemaining(prev => {
         if (prev <= 1) {
           // Auto-submit current type - mark as completed and move to next type
           setCompletedTypes(prev => {
-            const newCompleted = new Set([...prev, currentQuestionType]);
+            const newCompleted = new Set(prev);
+            newCompleted.add(currentQuestionType);
             
             // Move to next question type
             const allTypes = Object.keys(questionsByType);
@@ -352,7 +353,11 @@ export default function CandidateAssessmentPage() {
 
   const handleSubmitSection = () => {
     // Mark current type as completed and move to next type
-    setCompletedTypes(prev => new Set([...prev, currentQuestionType]));
+    setCompletedTypes(prev => {
+      const newSet = new Set(prev);
+      newSet.add(currentQuestionType);
+      return newSet;
+    });
     
     // Move to next question type
     const allTypes = Object.keys(questionsByType);
@@ -395,7 +400,11 @@ export default function CandidateAssessmentPage() {
         const existingAnswer = allAnswers.find((a) => a.questionIndex === index);
         if (existingAnswer) {
           // Answer exists, mark as submitted
-          setSubmittedQuestions(new Set([...submittedQuestions, index]));
+          setSubmittedQuestions(prev => {
+            const newSet = new Set(prev);
+            newSet.add(index);
+            return newSet;
+          });
         }
       }
     });
