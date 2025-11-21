@@ -19,6 +19,7 @@ export default withAuth(
           "/auth/signup",
           "/auth/super-admin-signup",
           "/api/auth",
+          "/api/assessment",
         ];
         
         // Check if route is public
@@ -34,6 +35,11 @@ export default withAuth(
         // Candidate assessment routes (use token from URL, not session)
         if (pathname.startsWith("/assessment/")) {
           return true; // These routes have their own token-based auth
+        }
+
+        // Candidate-facing API routes should remain public (token validated server-side)
+        if (pathname.startsWith("/api/assessment/")) {
+          return true;
         }
         
         // All other routes require authentication
@@ -57,7 +63,7 @@ export const config = {
      * - favicon.ico (favicon file)
      * - public files (public folder)
      */
-    "/((?!api/auth|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!api/auth|api/assessment|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };
 
