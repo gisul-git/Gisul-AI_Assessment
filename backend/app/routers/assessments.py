@@ -1022,9 +1022,26 @@ async def update_schedule_and_candidates(
     }
     assessment["schedule"] = schedule
 
-    # Update candidates
+    # Update candidates - NORMALIZE EMAIL AND NAME
     candidates = payload.get("candidates", [])
-    assessment["candidates"] = candidates
+    normalized_candidates = []
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            # Normalize email (lowercase + strip) and name (strip)
+            normalized_candidate = {
+                "email": candidate.get("email", "").strip().lower(),
+                "name": candidate.get("name", "").strip(),
+            }
+            # Preserve any other fields from the original candidate object
+            for key, value in candidate.items():
+                if key not in ["email", "name"]:
+                    normalized_candidate[key] = value
+            normalized_candidates.append(normalized_candidate)
+        else:
+            # If it's not a dict, keep it as-is (shouldn't happen, but defensive coding)
+            normalized_candidates.append(candidate)
+    
+    assessment["candidates"] = normalized_candidates
 
     # Update assessment URL and token
     assessment["assessmentUrl"] = payload.get("assessmentUrl")
@@ -1032,7 +1049,6 @@ async def update_schedule_and_candidates(
 
     await _save_assessment(db, assessment)
     return success_response("Schedule and candidates updated successfully", serialize_document(assessment))
-
 
 @router.put("/{assessment_id}/update-schedule")
 async def update_assessment_schedule(
