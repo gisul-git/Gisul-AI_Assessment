@@ -41,6 +41,12 @@ export default function CandidateAssessmentPage() {
   const [completedTypes, setCompletedTypes] = useState<Set<string>>(new Set());
   const [typeStartTime, setTypeStartTime] = useState<number>(Date.now());
   const [currentTypeQuestionIndex, setCurrentTypeQuestionIndex] = useState<number>(0);
+  const [answerValidationError, setAnswerValidationError] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [savingAnswer, setSavingAnswer] = useState<boolean>(false);
+  // Track last saved answer for each question to prevent duplicate logs
+  const [lastSavedAnswers, setLastSavedAnswers] = useState<Map<number, string>>(new Map());
 
   useEffect(() => {
     // Get candidate info from sessionStorage
@@ -195,9 +201,10 @@ export default function CandidateAssessmentPage() {
                 setTypeStartTime(Date.now());
               }
             } else {
-              // Last type completed - but don't submit yet, let overall assessment timer handle it
-              // Just mark as completed and stop the timer
+              // Last type completed - allow candidate to finalize immediately
+              // Don't wait for overall assessment timer - they can finalize now
               setTypeTimeRemaining(0);
+              // Note: Finalize button will be enabled even though section is marked as completed
             }
             
             return newCompleted;
@@ -336,7 +343,106 @@ export default function CandidateAssessmentPage() {
     return validateAnswer(currentAnswer);
   };
 
-  const handleNext = () => {
+  // Helper function to save answer log only if answer has changed
+  const saveAnswerLogIfChanged = async (questionIndex: number, answer: string, questionType: string): Promise<boolean> => {
+    // Only log non-MCQ questions
+    if (questionType === "MCQ" || !answer.trim()) {
+      return false;
+    }
+
+    // Check if answer has changed from last saved version
+    const lastSaved = lastSavedAnswers.get(questionIndex);
+    if (lastSaved === answer.trim()) {
+      // Answer hasn't changed, don't save
+      return false;
+    }
+
+    // Answer has changed, save the log
+    try {
+      setSavingAnswer(true);
+      setErrorMessage(null);
+      setSuccessMessage(null);
+      
+      // Retry logic with exponential backoff
+      let retries = 3;
+      let delay = 1000;
+      let lastError = null;
+      
+      while (retries > 0) {
+        try {
+          const response = await axios.post("/api/assessment/log-answer", {
+            assessmentId: id,
+            token,
+            email: candidateEmail,
+            name: candidateName,
+            questionIndex: questionIndex,
+            answer: answer.trim(),
+            questionType: questionType,
+          });
+          
+          if (response.data?.success) {
+            // Update last saved answer
+            setLastSavedAnswers(prev => {
+              const newMap = new Map(prev);
+              newMap.set(questionIndex, answer.trim());
+              return newMap;
+            });
+            setSuccessMessage("Answer saved");
+            setTimeout(() => setSuccessMessage(null), 2000);
+            return true;
+          } else {
+            throw new Error(response.data?.message || "Failed to log answer");
+          }
+        } catch (err: any) {
+          lastError = err;
+          retries--;
+          if (retries > 0) {
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay *= 2; // Exponential backoff
+          }
+        }
+      }
+      
+      if (retries === 0 && lastError) {
+        setErrorMessage("Failed to save answer log. Your answer is saved locally.");
+        setTimeout(() => setErrorMessage(null), 3000);
+        return false;
+      }
+      
+      return false;
+    } catch (err: any) {
+      console.error("Error logging answer:", err);
+      setErrorMessage("Failed to save answer log. Your answer is saved locally.");
+      setTimeout(() => setErrorMessage(null), 3000);
+      return false;
+    } finally {
+      setSavingAnswer(false);
+    }
+  };
+
+  const handleSaveAndNext = async () => {
+    // Save current answer and log it for non-MCQ questions (only if changed)
+    const currentAnswer = getCurrentAnswer();
+    const currentQuestion = questions[currentQuestionIndex];
+    const questionType = currentQuestion?.type || "";
+    
+    // Save the answer locally (already done in handleAnswerChange, but ensure it's saved)
+    if (currentAnswer.trim()) {
+      const timeSpent = Math.floor((Date.now() - typeStartTime) / 1000);
+      const existingAnswerIndex = answers.findIndex((a) => a.questionIndex === currentQuestionIndex);
+      
+      if (existingAnswerIndex >= 0) {
+        const updated = [...answers];
+        updated[existingAnswerIndex] = { questionIndex: currentQuestionIndex, answer: currentAnswer, timeSpent };
+        setAnswers(updated);
+      } else {
+        setAnswers([...answers, { questionIndex: currentQuestionIndex, answer: currentAnswer, timeSpent }]);
+      }
+      
+      // Log answer only if it has changed from last saved version
+      await saveAnswerLogIfChanged(currentQuestionIndex, currentAnswer, questionType);
+    }
+    
     // Move to next question within current type
     const currentTypeQuestions = getCurrentTypeQuestions();
     if (currentTypeQuestionIndex < currentTypeQuestions.length - 1) {
@@ -349,7 +455,29 @@ export default function CandidateAssessmentPage() {
     }
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
+    // Save current answer before navigating (only if changed)
+    const currentAnswer = getCurrentAnswer();
+    const currentQuestion = questions[currentQuestionIndex];
+    const questionType = currentQuestion?.type || "";
+    
+    // Save the answer locally if it exists
+    if (currentAnswer.trim()) {
+      const timeSpent = Math.floor((Date.now() - typeStartTime) / 1000);
+      const existingAnswerIndex = answers.findIndex((a) => a.questionIndex === currentQuestionIndex);
+      
+      if (existingAnswerIndex >= 0) {
+        const updated = [...answers];
+        updated[existingAnswerIndex] = { questionIndex: currentQuestionIndex, answer: currentAnswer, timeSpent };
+        setAnswers(updated);
+      } else {
+        setAnswers([...answers, { questionIndex: currentQuestionIndex, answer: currentAnswer, timeSpent }]);
+      }
+      
+      // Log answer only if it has changed from last saved version
+      await saveAnswerLogIfChanged(currentQuestionIndex, currentAnswer, questionType);
+    }
+    
     // Clear validation error when navigating
     setAnswerValidationError(false);
     
@@ -364,7 +492,29 @@ export default function CandidateAssessmentPage() {
     }
   };
 
-  const handleSubmitSection = () => {
+  const handleSubmitSection = async () => {
+    // Save and log current answer before submitting section (only if changed)
+    const currentAnswer = getCurrentAnswer();
+    const currentQuestion = questions[currentQuestionIndex];
+    const questionType = currentQuestion?.type || "";
+    
+    // Save the answer locally
+    if (currentAnswer.trim()) {
+      const timeSpent = Math.floor((Date.now() - typeStartTime) / 1000);
+      const existingAnswerIndex = answers.findIndex((a) => a.questionIndex === currentQuestionIndex);
+      
+      if (existingAnswerIndex >= 0) {
+        const updated = [...answers];
+        updated[existingAnswerIndex] = { questionIndex: currentQuestionIndex, answer: currentAnswer, timeSpent };
+        setAnswers(updated);
+      } else {
+        setAnswers([...answers, { questionIndex: currentQuestionIndex, answer: currentAnswer, timeSpent }]);
+      }
+      
+      // Log answer only if it has changed from last saved version
+      await saveAnswerLogIfChanged(currentQuestionIndex, currentAnswer, questionType);
+    }
+    
     // Mark current type as completed and move to next type
     setCompletedTypes(prev => {
       const newSet = new Set(prev);
@@ -915,9 +1065,9 @@ export default function CandidateAssessmentPage() {
                 {!isLastQuestionInType && (
                   <button
                     type="button"
-                    onClick={handleNext}
+                    onClick={handleSaveAndNext}
                     className="btn-primary"
-                    disabled={submitting}
+                    disabled={submitting || savingAnswer}
                     style={{ 
                       padding: "0.5rem 1rem",
                       fontSize: "0.875rem",
@@ -925,7 +1075,7 @@ export default function CandidateAssessmentPage() {
                       marginLeft: isFirstQuestionInType ? "auto" : 0
                     }}
                   >
-                    Next
+                    {savingAnswer ? "Saving..." : "Save & Next"}
                   </button>
                 )}
                 {isLastQuestionInType && (
@@ -933,7 +1083,7 @@ export default function CandidateAssessmentPage() {
                     type="button"
                     onClick={handleSubmitSection}
                     className="btn-primary"
-                    disabled={submitting || completedTypes.has(currentQuestionType)}
+                    disabled={submitting || (completedTypes.has(currentQuestionType) && !isLastType)}
                     style={{ 
                       padding: "0.5rem 1rem",
                       fontSize: "0.875rem",

@@ -313,11 +313,24 @@ export default function AssessmentDetailPage() {
                               setLoadingLogs(true);
                               setLogsError(null);
                               try {
+                                const candidateEmail = result.email;
+                                const candidateName = result.name;
+                                const candidateKey = `${candidateEmail.trim().toLowerCase()}_${candidateName.trim()}`;
+                                console.log("Fetching logs for:", { candidateEmail, candidateName, candidateKey });
+                                
                                 const logsResponse = await axios.get(
-                                  `/api/assessments/get-answer-logs?assessmentId=${id}&candidateEmail=${encodeURIComponent(result.email)}&candidateName=${encodeURIComponent(result.name)}`
+                                  `/api/assessments/get-answer-logs?assessmentId=${id}&candidateEmail=${encodeURIComponent(candidateEmail)}&candidateName=${encodeURIComponent(candidateName)}`
                                 );
+                                console.log("Answer logs response:", logsResponse.data);
+                                console.log("Response status:", logsResponse.status);
                                 if (logsResponse.data?.success) {
-                                  setAnswerLogs(logsResponse.data.data || []);
+                                  const logsData = logsResponse.data.data || [];
+                                  console.log("Answer logs data:", logsData);
+                                  console.log("Number of logs:", logsData.length);
+                                  if (logsData.length === 0) {
+                                    console.warn("No logs found. Check backend logs for candidate key mismatch.");
+                                  }
+                                  setAnswerLogs(logsData);
                                 } else {
                                   setLogsError(logsResponse.data?.message || logsResponse.data?.detail || "Failed to load answer logs");
                                 }

@@ -27,7 +27,7 @@ interface DashboardPageProps {
 }
 
 export default function DashboardPage({ session: serverSession }: DashboardPageProps) {
-  const { data: session } = useSession();
+  const { data: session, update: updateSession } = useSession();
   const router = useRouter();
   
   // Use server session if available, fallback to client session
@@ -40,20 +40,73 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
   const isOrgAdmin = role === "org_admin";
 
   useEffect(() => {
-    fetchAssessments();
-  }, []);
+    // Listen for token refresh events from the interceptor
+    const handleTokenRefresh = async (event: Event) => {
+      const customEvent = event as CustomEvent<{ backendToken: string; refreshToken: string }>;
+      const { backendToken, refreshToken } = customEvent.detail;
+      console.log("Token refreshed, updating NextAuth session...");
+      try {
+        await updateSession({
+          backendToken,
+          refreshToken,
+        });
+        console.log("NextAuth session updated successfully");
+        // Refetch assessments after session update
+        setTimeout(() => {
+          fetchAssessments();
+        }, 300);
+      } catch (err) {
+        console.error("Failed to update NextAuth session:", err);
+      }
+    };
+
+    window.addEventListener("token-refreshed", handleTokenRefresh);
+
+    // Check if session has backendToken, if not try to refresh
+    if (session?.user && !session.backendToken) {
+      console.log("Session authenticated but backendToken missing, attempting to refresh session...");
+      // Trigger a session update to re-run the JWT callback
+      updateSession().then(() => {
+        // Wait a bit for session to update, then fetch
+        setTimeout(() => {
+          fetchAssessments();
+        }, 500);
+      }).catch((err) => {
+        console.error("Failed to update session:", err);
+        fetchAssessments(); // Try anyway
+      });
+    } else {
+      fetchAssessments();
+    }
+
+    return () => {
+      window.removeEventListener("token-refreshed", handleTokenRefresh);
+    };
+  }, [session, updateSession]);
 
   const fetchAssessments = async () => {
     try {
       setLoading(true);
       setError(null);
+      
       const response = await axios.get("/api/assessments/list");
       if (response.data?.success && response.data?.data) {
         setAssessments(response.data.data);
+      } else {
+        setError(response.data?.message || "Failed to load assessments");
       }
     } catch (err: any) {
       console.error("Error fetching assessments:", err);
-      setError(err.response?.data?.message || err.message || "Failed to load assessments");
+      const errorMsg = err.response?.data?.message || err.response?.data?.detail || err.message || "Failed to load assessments";
+      
+      // If it's a 401, the interceptor should handle token refresh automatically
+      // But if it still fails, show the error
+      if (err.response?.status === 401) {
+        setError("Session expired. Please refresh the page or sign in again.");
+        console.log("401 error - token refresh should be handled by interceptor");
+      } else {
+        setError(errorMsg);
+      }
     } finally {
       setLoading(false);
     }

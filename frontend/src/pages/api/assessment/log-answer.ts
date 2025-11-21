@@ -1,6 +1,4 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth";
-import { authOptions } from "../auth/[...nextauth]";
 import fastApiClient from "../../../lib/fastapi";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -9,17 +7,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ success: false, message: "Method Not Allowed" });
   }
 
-  // Session validation - Note: This is for candidate routes, but we still validate session exists
-  // The actual candidate verification happens in the backend with token
-  const session = await getServerSession(req, res, authOptions);
-  if (!session) {
-    return res.status(401).json({ success: false, message: "Unauthorized. Please sign in." });
+  const payload = req.body;
+
+  if (!payload?.assessmentId || !payload?.token || !payload?.email || !payload?.name) {
+    return res.status(400).json({ success: false, message: "Missing required fields" });
   }
 
   try {
-    const response = await fastApiClient.post("/api/assessment/log-answer", req.body);
+    const response = await fastApiClient.post("/api/assessment/log-answer", payload);
     return res.status(response.status || 200).json(response.data);
   } catch (error: any) {
+    console.error("Error in log-answer API route:", error);
     const statusCode = error?.response?.status || 500;
     const errorMessage =
       error?.response?.data?.detail ||

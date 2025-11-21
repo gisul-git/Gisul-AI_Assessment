@@ -339,10 +339,42 @@ export default function CreateNewAssessmentPage() {
 
     // Save schedule and candidates to backend
     try {
+      // Normalize datetime strings to ISO format with seconds and timezone
+      // datetime-local input gives format: YYYY-MM-DDTHH:MM (no seconds, no timezone)
+      // We need to convert IST (UTC+5:30) to UTC and add seconds
+      const normalizeDateTime = (dt: string): string => {
+        if (!dt) return dt;
+        
+        // If format is YYYY-MM-DDTHH:MM (missing seconds), add :00
+        if (dt.match(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)) {
+          // Parse as IST (UTC+5:30) and convert to UTC ISO string
+          // datetime-local input is in local timezone, but we treat it as IST
+          // Create a date object assuming IST timezone
+          const dtWithSeconds = dt + ":00";
+          // Create date assuming IST (UTC+5:30)
+          const istDate = new Date(dtWithSeconds + "+05:30");
+          
+          if (!isNaN(istDate.getTime())) {
+            // Convert to ISO string (UTC)
+            return istDate.toISOString();
+          } else {
+            // Fallback: just add seconds and Z
+            return dt + ":00Z";
+          }
+        }
+        
+        // If already has seconds but no timezone, add Z
+        if (dt.match(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)) {
+          return dt + "Z";
+        }
+        
+        return dt;
+      };
+
       await axios.post("/api/assessments/update-schedule-and-candidates", {
         assessmentId,
-        startTime,
-        endTime,
+        startTime: normalizeDateTime(startTime),
+        endTime: normalizeDateTime(endTime),
         candidates,
         assessmentUrl: url,
         token,

@@ -5,6 +5,7 @@ export interface BackendUser {
   role: string;
   organization?: string | null;
   token: string;
+  refreshToken?: string;
 }
 
 export interface AuthResponsePayload {

@@ -13,7 +13,7 @@ export const authOptions: NextAuthOptions = {
   },
   session: {
     strategy: "jwt",
-    maxAge: 60 * 60, // 1 hour (matches backend access token expiration)
+    maxAge: 30 * 24 * 60 * 60, // 30 days (matches refresh token expiration)
   },
   debug: process.env.NODE_ENV === "development",
   useSecureCookies: process.env.NODE_ENV === "production", // Secure cookies only in production
@@ -62,6 +62,7 @@ export const authOptions: NextAuthOptions = {
             role: data.user.role,
             organization: data.user.organization,
             token: data.token,
+            refreshToken: data.refreshToken, // Store refresh token
           };
           return backendUser;
         } catch (error: any) {
@@ -93,26 +94,40 @@ export const authOptions: NextAuthOptions = {
       try {
         const baseURL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
         
-        // Quick health check before OAuth login
-        try {
-          await fastApiClient.get("/health", { timeout: 10000 });
-        } catch (healthError: any) {
-          console.error("Backend health check failed:", healthError);
-          if (healthError?.code === "ECONNREFUSED" || healthError?.message?.includes("ECONNREFUSED")) {
-            throw new Error("Backend server is not running. Please start the backend server on http://localhost:8000");
-          } else if (healthError?.code === "ETIMEDOUT" || healthError?.message?.includes("timeout")) {
-            throw new Error("Backend server is not responding. Please check if it's running on http://localhost:8000");
-          }
-          // If health check fails but it's not a connection issue, continue with OAuth login
-        }
-        
+        // Skip health check for OAuth - go directly to login
+        // Health check was causing timeouts. OAuth login will fail fast if backend is down.
         console.log("Calling backend OAuth login at:", `${baseURL}/api/auth/oauth-login`);
         
-        const response = await fastApiClient.post("/api/auth/oauth-login", {
-          email: user.email,
-          name: user.name ?? (profile as any)?.name ?? user.email.split("@")[0],
-          provider: account.provider,
-        });
+        let response;
+        try {
+          // Use a longer timeout for OAuth login (30 seconds)
+          response = await fastApiClient.post("/api/auth/oauth-login", {
+            email: user.email,
+            name: user.name ?? (profile as any)?.name ?? user.email.split("@")[0],
+            provider: account.provider,
+          }, {
+            timeout: 30000, // 30 seconds for OAuth login
+          });
+        } catch (oauthError: any) {
+          console.error("OAuth login API call failed:", {
+            code: oauthError?.code,
+            message: oauthError?.message,
+            status: oauthError?.response?.status,
+            data: oauthError?.response?.data,
+            baseURL,
+          });
+          
+          // Provide specific error messages
+          if (oauthError?.code === "ECONNREFUSED" || oauthError?.message?.includes("ECONNREFUSED")) {
+            throw new Error("Cannot connect to backend server. Please ensure the backend is running on http://localhost:8000");
+          } else if (oauthError?.code === "ETIMEDOUT" || oauthError?.message?.includes("timeout")) {
+            throw new Error("Backend request timed out. Please ensure the backend server is running and MongoDB is connected.");
+          } else if (oauthError?.code === "ERR_NETWORK" || oauthError?.message?.includes("Network Error")) {
+            throw new Error("Network error. Please check if the backend server is running on http://localhost:8000");
+          }
+          // Re-throw with original error details
+          throw oauthError;
+        }
 
         const data = response.data?.data;
         if (!data?.token || !data?.user) {
@@ -127,6 +142,7 @@ export const authOptions: NextAuthOptions = {
           role: data.user.role,
           organization: data.user.organization,
           token: data.token,
+          refreshToken: data.refreshToken, // Store refresh token
         };
 
         Object.assign(user, backendUser);
@@ -153,12 +169,27 @@ export const authOptions: NextAuthOptions = {
         throw new Error((error?.response?.data?.detail || error?.response?.data?.message || error?.message) ?? "OAuth sign-in failed");
       }
     },
-    async jwt({ token, user, account }) {
+    async jwt({ token, user, account, trigger }) {
+      // Handle token refresh via update() call
+      if (trigger === "update") {
+        // When update() is called, the new values are passed in the token parameter
+        // Update backendToken and refreshToken if provided
+        const updatedData = token as any;
+        if (updatedData.backendToken) {
+          token.backendToken = updatedData.backendToken;
+        }
+        if (updatedData.refreshToken) {
+          token.refreshToken = updatedData.refreshToken;
+        }
+        return token;
+      }
+
       if (user) {
         token.id = (user as BackendUser).id ?? token.sub;
         token.role = (user as BackendUser).role ?? token.role;
         token.organization = (user as BackendUser).organization ?? token.organization;
         token.backendToken = (user as BackendUser).token ?? token.backendToken;
+        token.refreshToken = (user as BackendUser).refreshToken ?? token.refreshToken;
       }
 
       if (account) {
@@ -175,6 +206,7 @@ export const authOptions: NextAuthOptions = {
       }
 
       (session as any).backendToken = token.backendToken as string | undefined;
+      (session as any).refreshToken = token.refreshToken as string | undefined;
       (session as any).provider = token.provider as string | undefined;
       return session;
     },
