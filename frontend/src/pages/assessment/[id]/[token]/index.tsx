@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import axios from "axios";
 import Link from "next/link";
@@ -11,6 +11,10 @@ export default function CandidateEntryPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    console.log("[CandidateEntry] Router query params:", router.query);
+  }, [router.query]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -22,6 +26,15 @@ export default function CandidateEntryPage() {
     setLoading(true);
     setError(null);
 
+    const payload = {
+      assessmentId: id,
+      token,
+      email: email.trim(),
+      name: name.trim(),
+    };
+
+    console.log("[CandidateEntry] Submitting verification payload:", payload);
+
     try {
       const response = await axios.post("/api/assessment/verify-candidate", {
         assessmentId: id,
@@ -30,6 +43,8 @@ export default function CandidateEntryPage() {
         name: name.trim(),
       });
 
+      console.log("[CandidateEntry] Verification response:", response.status, response.data);
+
       if (response.data?.success) {
         // Store candidate info in sessionStorage
         sessionStorage.setItem("candidateEmail", email.trim());
@@ -37,10 +52,16 @@ export default function CandidateEntryPage() {
         // Redirect to assessment page
         router.push(`/assessment/${id}/${token}/take`);
       } else {
+        console.warn("[CandidateEntry] Verification failed with message:", response.data?.message);
         setError(response.data?.message || "Invalid credentials");
       }
     } catch (err: any) {
-      console.error("Error verifying candidate:", err);
+      console.error("[CandidateEntry] Error verifying candidate:", {
+        message: err?.message,
+        status: err?.response?.status,
+        data: err?.response?.data,
+        configUrl: err?.config?.url,
+      });
       setError(err.response?.data?.message || err.message || "Failed to verify. Please check your email and name.");
     } finally {
       setLoading(false);
