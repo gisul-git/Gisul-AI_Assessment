@@ -44,13 +44,11 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
     const handleTokenRefresh = async (event: Event) => {
       const customEvent = event as CustomEvent<{ backendToken: string; refreshToken: string }>;
       const { backendToken, refreshToken } = customEvent.detail;
-      console.log("Token refreshed, updating NextAuth session...");
       try {
         await updateSession({
           backendToken,
           refreshToken,
         });
-        console.log("NextAuth session updated successfully");
         // Refetch assessments after session update
         setTimeout(() => {
           fetchAssessments();
@@ -64,7 +62,6 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
 
     // Check if session has backendToken, if not try to refresh
     if (session?.user && !session.backendToken) {
-      console.log("Session authenticated but backendToken missing, attempting to refresh session...");
       // Trigger a session update to re-run the JWT callback
       updateSession().then(() => {
         // Wait a bit for session to update, then fetch
@@ -103,7 +100,6 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
       // But if it still fails, show the error
       if (err.response?.status === 401) {
         setError("Session expired. Please refresh the page or sign in again.");
-        console.log("401 error - token refresh should be handled by interceptor");
       } else {
         setError(errorMsg);
       }

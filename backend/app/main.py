@@ -39,14 +39,23 @@ cors_origins_list = [
 if cors_origins_str and cors_origins_str != "http://localhost:3000":
     cors_origins_list = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
 
-# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],        # allow everyone (testing only)
-    allow_methods=["*"],
+    allow_origins=cors_origins_list,  # Restricted to specific origins
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     allow_credentials=True,
+    expose_headers=["*"],
 )
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["*"],        # allow everyone (testing only)
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+#     allow_credentials=True,
+# )
+
 # Security Headers Middleware
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):

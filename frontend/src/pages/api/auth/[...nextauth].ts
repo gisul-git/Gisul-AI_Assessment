@@ -169,17 +169,15 @@ export const authOptions: NextAuthOptions = {
         throw new Error((error?.response?.data?.detail || error?.response?.data?.message || error?.message) ?? "OAuth sign-in failed");
       }
     },
-    async jwt({ token, user, account, trigger }) {
+    async jwt({ token, user, account, trigger, session }) {
       // Handle token refresh via update() call
-      if (trigger === "update") {
-        // When update() is called, the new values are passed in the token parameter
-        // Update backendToken and refreshToken if provided
-        const updatedData = token as any;
-        if (updatedData.backendToken) {
-          token.backendToken = updatedData.backendToken;
+      if (trigger === "update" && session) {
+        const updatedSession = session as any;
+        if (updatedSession.backendToken) {
+          token.backendToken = updatedSession.backendToken;
         }
-        if (updatedData.refreshToken) {
-          token.refreshToken = updatedData.refreshToken;
+        if (updatedSession.refreshToken) {
+          token.refreshToken = updatedSession.refreshToken;
         }
         return token;
       }

@@ -1,4 +1,12 @@
-import { useState, useEffect, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type ClipboardEvent as ReactClipboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useRouter } from "next/router";
 import axios from "axios";
 
@@ -47,6 +55,8 @@ export default function CandidateAssessmentPage() {
   const [savingAnswer, setSavingAnswer] = useState<boolean>(false);
   // Track last saved answer for each question to prevent duplicate logs
   const [lastSavedAnswers, setLastSavedAnswers] = useState<Map<number, string>>(new Map());
+  const [clipboardWarning, setClipboardWarning] = useState<string | null>(null);
+  const clipboardWarningTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     // Get candidate info from sessionStorage
@@ -230,43 +240,90 @@ export default function CandidateAssessmentPage() {
       setAssessmentTimeRemaining(remaining);
       
       if (remaining <= 0) {
-        // Auto-submit entire assessment - submit all answers
-        setSubmitting(true);
-        const allAnswers = [...answers];
-        // Mark all unanswered questions as submitted
-        questions.forEach((_, index) => {
-          if (!submittedQuestions.has(index)) {
-            const existingAnswer = allAnswers.find((a) => a.questionIndex === index);
-            if (existingAnswer) {
-              // Answer exists, include it
+        clearInterval(assessmentTimer);
+        const autoSubmitAssessment = async () => {
+          setSubmitting(true);
+          let allAnswers = [...answers];
+
+          // Ensure the current question's in-progress answer is captured
+          const currentAnswerEntry = allAnswers.find((a) => a.questionIndex === currentQuestionIndex);
+          const currentAnswerValue = currentAnswerEntry?.answer || "";
+          const currentQuestion = questions[currentQuestionIndex];
+          const questionType = currentQuestion?.type || "";
+
+          if (currentAnswerValue.trim()) {
+            const timeSpent = Math.floor((Date.now() - typeStartTime) / 1000);
+            if (currentAnswerEntry) {
+              currentAnswerEntry.timeSpent = timeSpent;
+              currentAnswerEntry.answer = currentAnswerValue;
             } else {
-              // No answer, add empty answer
-              allAnswers.push({ questionIndex: index, answer: "", timeSpent: 0 });
+              allAnswers = [
+                ...allAnswers,
+                { questionIndex: currentQuestionIndex, answer: currentAnswerValue, timeSpent },
+              ];
+            }
+
+            try {
+              await saveAnswerLogIfChanged(currentQuestionIndex, currentAnswerValue, questionType);
+            } catch (logError) {
+              console.error("Error logging answer during auto-submit:", logError);
             }
           }
-        });
-        
-        axios.post("/api/assessment/submit-answers", {
-          assessmentId: id,
-          token,
-          email: candidateEmail,
-          name: candidateName,
-          answers: allAnswers,
-          skippedQuestions: [],
-        }).then((response) => {
-          if (response.data?.success) {
-            router.push(`/assessment/${id}/${token}/completed`);
+
+          // Mark all unanswered questions as submitted / add empty answers
+          questions.forEach((_, index) => {
+            if (!submittedQuestions.has(index)) {
+              const existingAnswer = allAnswers.find((a) => a.questionIndex === index);
+              if (!existingAnswer) {
+                allAnswers.push({ questionIndex: index, answer: "", timeSpent: 0 });
+              }
+            }
+          });
+          
+          try {
+            const response = await axios.post("/api/assessment/submit-answers", {
+              assessmentId: id,
+              token,
+              email: candidateEmail,
+              name: candidateName,
+              answers: allAnswers,
+              skippedQuestions: [],
+            });
+
+            if (response.data?.success) {
+              router.push(`/assessment/${id}/${token}/completed`);
+            } else {
+              setError("Failed to submit assessment");
+            }
+          } catch (err: any) {
+            console.error("Error auto-submitting assessment:", err);
+            setError(err.response?.data?.message || "Failed to submit assessment");
+          } finally {
+            setSubmitting(false);
           }
-        }).catch((err) => {
-          console.error("Error auto-submitting assessment:", err);
-        }).finally(() => {
-          setSubmitting(false);
-        });
+        };
+
+        autoSubmitAssessment();
       }
     }, 1000);
 
     return () => clearInterval(assessmentTimer);
-  }, [endTime, timeStatus, submitting, id, token, candidateEmail, candidateName, answers, questions, submittedQuestions, router]);
+  }, [
+    endTime,
+    timeStatus,
+    submitting,
+    id,
+    token,
+    candidateEmail,
+    candidateName,
+    answers,
+    questions,
+    submittedQuestions,
+    currentQuestionIndex,
+    typeStartTime,
+    saveAnswerLogIfChanged,
+    router,
+  ]);
 
   useEffect(() => {
     // Check time status periodically
@@ -332,6 +389,54 @@ export default function CandidateAssessmentPage() {
     }
   };
 
+  const showClipboardRestriction = useCallback((message: string) => {
+    setClipboardWarning(message);
+    if (clipboardWarningTimeoutRef.current) {
+      clearTimeout(clipboardWarningTimeoutRef.current);
+    }
+    clipboardWarningTimeoutRef.current = setTimeout(() => {
+      setClipboardWarning(null);
+      clipboardWarningTimeoutRef.current = null;
+    }, 2500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (clipboardWarningTimeoutRef.current) {
+        clearTimeout(clipboardWarningTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleClipboardEvent = useCallback(
+    (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+      event.preventDefault();
+      showClipboardRestriction(`Copy/paste is disabled during the assessment.`);
+    },
+    [showClipboardRestriction]
+  );
+
+  const handleContextMenuBlock = useCallback(
+    (event: ReactMouseEvent<HTMLTextAreaElement>) => {
+      event.preventDefault();
+      showClipboardRestriction("Copy/paste is disabled during the assessment.");
+    },
+    [showClipboardRestriction]
+  );
+
+  const handleKeyDownGuard = useCallback(
+    (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      const key = event.key.toLowerCase();
+      const isClipboardCombo = (event.metaKey || event.ctrlKey) && ["c", "v", "x"].includes(key);
+      const isShiftInsert = event.shiftKey && event.key === "Insert";
+      if (isClipboardCombo || isShiftInsert) {
+        event.preventDefault();
+        showClipboardRestriction("Copy/paste is disabled during the assessment.");
+      }
+    },
+    [showClipboardRestriction]
+  );
+
   const validateAnswer = (answer: string): boolean => {
     // For MCQ, answer will be like "A", "B", etc. (not empty)
     // For text-based, answer should not be empty or only spaces
@@ -344,7 +449,11 @@ export default function CandidateAssessmentPage() {
   };
 
   // Helper function to save answer log only if answer has changed
-  const saveAnswerLogIfChanged = async (questionIndex: number, answer: string, questionType: string): Promise<boolean> => {
+  async function saveAnswerLogIfChanged(
+    questionIndex: number,
+    answer: string,
+    questionType: string
+  ): Promise<boolean> {
     // Only log non-MCQ questions
     if (questionType === "MCQ" || !answer.trim()) {
       return false;
@@ -418,7 +527,7 @@ export default function CandidateAssessmentPage() {
     } finally {
       setSavingAnswer(false);
     }
-  };
+  }
 
   const handleSaveAndNext = async () => {
     // Save current answer and log it for non-MCQ questions (only if changed)
@@ -809,6 +918,18 @@ export default function CandidateAssessmentPage() {
                   </button>
                 </div>
               )}
+              {clipboardWarning && (
+                <div style={{
+                  padding: "0.85rem",
+                  backgroundColor: "#fffbeb",
+                  border: "1px solid #fbbf24",
+                  borderRadius: "0.5rem",
+                  marginBottom: "1rem",
+                  color: "#92400e",
+                }}>
+                  {clipboardWarning}
+                </div>
+              )}
               {/* Top Bar - Assessment Timer (center) and Type Timer (right) */}
               <div style={{ 
                 display: "flex", 
@@ -1029,6 +1150,11 @@ export default function CandidateAssessmentPage() {
                 <textarea
                   value={getCurrentAnswer()}
                   onChange={(e) => handleAnswerChange(e.target.value)}
+                  onCopy={handleClipboardEvent}
+                  onCut={handleClipboardEvent}
+                  onPaste={handleClipboardEvent}
+                  onKeyDown={handleKeyDownGuard}
+                  onContextMenu={handleContextMenuBlock}
                   placeholder="Enter your answer here..."
                   rows={6}
                   style={{

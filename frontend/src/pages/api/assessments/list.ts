@@ -65,7 +65,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (error: any) {
       // If we get a 401, try to refresh the token and retry
       if (error?.response?.status === 401 && refreshToken) {
-        console.log("Got 401, attempting to refresh token...");
         const newToken = await refreshTokenIfNeeded();
         if (newToken) {
           // Retry with new token

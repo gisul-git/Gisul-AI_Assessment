@@ -4,33 +4,43 @@ import { useEffect } from "react";
 
 import "@/styles/globals.css";
 
-// Component to handle global token refresh
-function TokenRefreshHandler() {
-  const { update: updateSession } = useSession();
+function SessionRefreshListener() {
+  const { update } = useSession();
 
   useEffect(() => {
-    // Listen for token refresh events from the interceptor
-    const handleTokenRefresh = async (event: Event) => {
-      const customEvent = event as CustomEvent<{ backendToken: string; refreshToken: string }>;
-      const { backendToken, refreshToken } = customEvent.detail;
-      console.log("Token refreshed globally, updating NextAuth session...");
+    const handleTokenRefreshed = async (event: Event) => {
+      const { backendToken, refreshToken } = (event as CustomEvent<{
+        backendToken: string;
+        refreshToken: string;
+      }>).detail || {};
+
+      if (!backendToken) return;
+
       try {
-        await updateSession({
+        await update({
           backendToken,
           refreshToken,
         });
-        console.log("NextAuth session updated successfully");
+
+        if (typeof window !== "undefined") {
+          try {
+            sessionStorage.removeItem("temp_access_token");
+            sessionStorage.removeItem("temp_refresh_token");
+          } catch (storageError) {
+            // Ignore storage errors
+          }
+        }
       } catch (err) {
-        console.error("Failed to update NextAuth session:", err);
+        console.error("Failed to persist refreshed tokens:", err);
       }
     };
 
-    window.addEventListener("token-refreshed", handleTokenRefresh);
+    window.addEventListener("token-refreshed", handleTokenRefreshed);
 
     return () => {
-      window.removeEventListener("token-refreshed", handleTokenRefresh);
+      window.removeEventListener("token-refreshed", handleTokenRefreshed);
     };
-  }, [updateSession]);
+  }, [update]);
 
   return null;
 }
@@ -39,7 +49,7 @@ export default function App({ Component, pageProps }: AppProps) {
   const { session, ...rest } = pageProps as any;
   return (
     <SessionProvider session={session}>
-      <TokenRefreshHandler />
+      <SessionRefreshListener />
       <Component {...rest} />
     </SessionProvider>
   );

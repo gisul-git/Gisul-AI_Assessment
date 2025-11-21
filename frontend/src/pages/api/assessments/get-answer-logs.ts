@@ -27,7 +27,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const url = `/api/assessments/${assessmentId}/answer-logs?candidateEmail=${encodeURIComponent(candidateEmail as string)}&candidateName=${encodeURIComponent(candidateName as string)}`;
-    console.log("Calling backend endpoint:", url);
     
     const response = await fastApiClient.get(url, {
       headers: {
