@@ -630,6 +630,162 @@ Respond ONLY with a JSON object in this exact format:
     }
 
 
+async def evaluate_answer_with_ai(
+    question: Dict[str, Any],
+    candidate_answer: str,
+    max_score: int
+) -> Dict[str, Any]:
+    """Evaluate candidate answer using AI and return score, feedback, and evaluation details."""
+    question_text = question.get("questionText", "").strip()
+    question_type = question.get("type", "Subjective")
+    ideal_answer = question.get("idealAnswer", "")
+    expected_logic = question.get("expectedLogic", "")
+    difficulty = question.get("difficulty", "Medium")
+    candidate_answer_clean = candidate_answer.strip()
+    
+    # Pre-check: If candidate answer is too similar to question text, return 0 immediately
+    if candidate_answer_clean:
+        # Normalize both texts for comparison (lowercase, remove extra spaces)
+        question_normalized = " ".join(question_text.lower().split())
+        answer_normalized = " ".join(candidate_answer_clean.lower().split())
+        
+        # Check if answer is identical or very similar to question (80%+ similarity)
+        if question_normalized and answer_normalized:
+            # Simple similarity check: if answer contains most of question words in same order
+            question_words = question_normalized.split()
+            answer_words = answer_normalized.split()
+            
+            if len(question_words) > 0:
+                # Check if answer starts with question text or is very similar
+                if answer_normalized.startswith(question_normalized[:min(len(question_normalized), len(answer_normalized))]):
+                    if len(answer_words) <= len(question_words) * 1.2:  # Answer is not much longer than question
+                        return {
+                            "score": 0,
+                            "feedback": "Answer appears to be copied from the question text. No marks awarded.",
+                            "evaluation": "The candidate's answer is identical or very similar to the question itself, indicating they copied the question without providing an actual answer. This demonstrates no understanding of the concept."
+                        }
+                
+                # Check word overlap - if more than 70% of question words are in answer in same order
+                matching_words = 0
+                question_idx = 0
+                for word in answer_words:
+                    if question_idx < len(question_words) and word == question_words[question_idx]:
+                        matching_words += 1
+                        question_idx += 1
+                    elif question_idx < len(question_words) and word in question_words[question_idx:question_idx+3]:
+                        # Allow some flexibility
+                        matching_words += 0.5
+                
+                similarity_ratio = matching_words / len(question_words) if question_words else 0
+                if similarity_ratio > 0.7 and len(answer_words) <= len(question_words) * 1.3:
+                    return {
+                        "score": 0,
+                        "feedback": "Answer appears to be copied from the question text. No marks awarded.",
+                        "evaluation": "The candidate's answer is very similar to the question itself, indicating they copied the question without providing an actual answer. This demonstrates no understanding of the concept."
+                    }
+    
+    prompt = f"""
+You are a strict assessment evaluator. Evaluate the candidate's answer for the following question and provide a score.
+
+Question Type: {question_type}
+Difficulty: {difficulty}
+Question: {question_text}
+
+Ideal Answer (if provided): {ideal_answer if ideal_answer else "Not provided"}
+Expected Logic (if provided): {expected_logic if expected_logic else "Not provided"}
+
+Candidate's Answer: {candidate_answer_clean}
+
+CRITICAL EVALUATION RULES - BE VERY STRICT:
+1. FIRST CHECK: If the candidate's answer is identical, nearly identical, or very similar (more than 60% similar) to the question text itself, this means the candidate just copied the question without providing an actual answer. You MUST give 0 points immediately.
+2. If the candidate's answer is empty, too short (less than 15 words for subjective/descriptive questions), or irrelevant, give 0 points.
+3. The answer MUST demonstrate actual understanding and knowledge, not just repeat or rephrase the question.
+4. Compare the candidate's answer with the ideal answer (if provided). The answer should show the candidate understands the concept and can explain it, not just copy the question.
+5. Evaluate based on:
+   - Does the answer actually address the question with NEW information? (not just copying/rephrasing the question)
+   - Accuracy and correctness compared to ideal answer
+   - Completeness - does it cover the key points expected?
+   - Understanding - does it show the candidate truly understands the concept?
+   - Quality of explanation (for descriptive/subjective questions)
+   - Logic and reasoning (for pseudo code questions)
+   - Originality - is it the candidate's own work demonstrating knowledge?
+
+Scoring Guidelines - BE STRICT:
+- Maximum Score: {max_score} points
+- Award full marks ONLY if the answer is completely correct, comprehensive, demonstrates clear understanding, and provides substantial information beyond the question
+- Award partial marks (1-{max_score-1}) ONLY if the answer shows some understanding and provides relevant information:
+  * 1-{max_score//3} points: Minimal understanding, partially correct but incomplete
+  * {max_score//3 + 1}-{max_score*2//3} points: Good understanding, mostly correct but missing some details
+  * {max_score*2//3 + 1}-{max_score-1} points: Very good understanding, correct and comprehensive but minor gaps
+- Award 0 points if:
+  * Answer is identical, nearly identical, or very similar (60%+) to the question text
+  * Answer is empty or too short (less than 15 words)
+  * Answer is completely incorrect or irrelevant
+  * Answer shows no understanding of the concept
+  * Answer just rephrases the question without providing actual information
+
+VERY IMPORTANT: 
+- If the candidate's answer is similar to the question text (even if rephrased), it means they copied it. Give 0 points.
+- The answer must provide NEW information, explanations, or solutions that demonstrate knowledge.
+- Be very strict - it's better to give 0 points than to give marks for copied content.
+
+Provide your evaluation in the following JSON format:
+{{
+    "score": <number between 0 and {max_score}>,
+    "feedback": "<brief feedback explaining the score, MUST mention if answer was copied or too similar to question>",
+    "evaluation": "<detailed evaluation explaining why this score was given, compare with ideal answer, explain if it was copied>"
+}}
+
+Respond ONLY with the JSON object, no additional text.
+"""
+
+    client = _get_client()
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+        )
+    except Exception as exc:
+        logger.error(f"Error in AI evaluation: {exc}")
+        # Fallback: return 0 score if evaluation fails
+        return {
+            "score": 0,
+            "feedback": "Evaluation could not be completed automatically.",
+            "evaluation": "AI evaluation service unavailable."
+        }
+    
+    text = response.choices[0].message.content.strip() if response.choices else ""
+    
+    # Try to parse JSON from response
+    try:
+        import json
+        # Extract JSON from text
+        if "{" in text and "}" in text:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            parsed = json.loads(text[start:end])
+            
+            # Validate and clamp score
+            score = int(parsed.get("score", 0))
+            score = max(0, min(score, max_score))  # Clamp between 0 and max_score
+            
+            return {
+                "score": score,
+                "feedback": parsed.get("feedback", "No feedback provided."),
+                "evaluation": parsed.get("evaluation", "No detailed evaluation provided.")
+            }
+    except Exception as parse_error:
+        logger.error(f"Error parsing AI evaluation response: {parse_error}")
+    
+    # Fallback: return 0 score if parsing fails
+    return {
+        "score": 0,
+        "feedback": "Evaluation response could not be parsed.",
+        "evaluation": "AI evaluation response was invalid."
+    }
+
+
 async def generate_questions_for_topic_safe(topic: str, config: Dict[str, Any]) -> List[Dict[str, Any]]:
     try:
         result = await generate_questions_for_topic(topic, config)

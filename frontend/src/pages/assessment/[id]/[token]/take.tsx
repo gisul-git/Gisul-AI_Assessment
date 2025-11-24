@@ -188,6 +188,37 @@ export default function CandidateAssessmentPage() {
     const typeTimer = setInterval(() => {
           setTypeTimeRemaining(prev => {
         if (prev <= 1) {
+          // Section timer expired - save current answer before locking section
+          setAnswers(currentAnswers => {
+            const currentAnswerEntry = currentAnswers.find((a) => a.questionIndex === currentQuestionIndex);
+            const currentAnswerValue = currentAnswerEntry?.answer || "";
+            const currentQuestion = questions[currentQuestionIndex];
+            const questionType = currentQuestion?.type || "";
+
+            // Save the current answer if it exists
+            if (currentAnswerValue.trim()) {
+              const timeSpent = Math.floor((Date.now() - typeStartTime) / 1000);
+              const updatedAnswers = [...currentAnswers];
+              const existingIndex = updatedAnswers.findIndex((a) => a.questionIndex === currentQuestionIndex);
+              
+              if (existingIndex >= 0) {
+                updatedAnswers[existingIndex] = { questionIndex: currentQuestionIndex, answer: currentAnswerValue, timeSpent };
+              } else {
+                updatedAnswers.push({ questionIndex: currentQuestionIndex, answer: currentAnswerValue, timeSpent });
+              }
+
+              // Log answer for non-MCQ questions
+              if (questionType !== "MCQ" && currentAnswerValue.trim()) {
+                saveAnswerLogIfChanged(currentQuestionIndex, currentAnswerValue, questionType).catch((logError) => {
+                  console.error("Error logging answer during section timer expiration:", logError);
+                });
+              }
+
+              return updatedAnswers;
+            }
+            return currentAnswers;
+          });
+
           // Section timer expired - lock this section and move to next type (if available)
           // DO NOT submit the entire assessment - only the overall assessment timer should do that
           setCompletedTypes(prev => {
@@ -227,7 +258,7 @@ export default function CandidateAssessmentPage() {
     }, 1000);
 
     return () => clearInterval(typeTimer);
-  }, [enablePerSectionTimers, typeTimeRemaining, timeStatus, currentQuestionType, completedTypes, questionsByType, questionTypeTimes, questions, answers, id, token, candidateEmail, candidateName, router]);
+  }, [enablePerSectionTimers, typeTimeRemaining, timeStatus, currentQuestionType, completedTypes, questionsByType, questionTypeTimes, questions, currentQuestionIndex, typeStartTime, saveAnswerLogIfChanged]);
 
   useEffect(() => {
     // Assessment-level timer
@@ -1150,11 +1181,6 @@ export default function CandidateAssessmentPage() {
                 <textarea
                   value={getCurrentAnswer()}
                   onChange={(e) => handleAnswerChange(e.target.value)}
-                  onCopy={handleClipboardEvent}
-                  onCut={handleClipboardEvent}
-                  onPaste={handleClipboardEvent}
-                  onKeyDown={handleKeyDownGuard}
-                  onContextMenu={handleContextMenuBlock}
                   placeholder="Enter your answer here..."
                   rows={6}
                   style={{

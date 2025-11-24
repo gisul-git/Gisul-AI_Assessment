@@ -926,6 +926,8 @@ async def finalize_assessment(
             assessment["questionTypeTimes"] = payload.questionTypeTimes
         if payload.enablePerSectionTimers is not None:
             assessment["enablePerSectionTimers"] = payload.enablePerSectionTimers
+        if payload.passPercentage is not None:
+            assessment["passPercentage"] = payload.passPercentage
         assessment["finalizedAt"] = _now_utc()
         await _save_assessment(db, assessment)
         
@@ -1170,7 +1172,26 @@ async def get_answer_logs(
                     if question and isinstance(question, dict):
                         all_questions.append(question)
 
+        # Get AI evaluation results and submitted answers from candidate responses
+        candidate_responses = assessment.get("candidateResponses", {})
+        ai_evaluation = {}
+        submitted_answers = {}  # {questionIndex: answer}
+        if isinstance(candidate_responses, dict):
+            candidate_response = candidate_responses.get(candidate_key, {})
+            if isinstance(candidate_response, dict):
+                ai_evaluation = candidate_response.get("aiEvaluation", {})
+                # Get submitted answers
+                answers_list = candidate_response.get("answers", [])
+                if isinstance(answers_list, list):
+                    for ans in answers_list:
+                        if isinstance(ans, dict):
+                            q_idx = ans.get("questionIndex")
+                            if q_idx is not None:
+                                submitted_answers[q_idx] = ans.get("answer", "")
+
         # Format logs with question details
+        # First, process questions that have logs
+        questions_with_logs = set()
         formatted_logs = []
         for question_index_str, log_entries in candidate_logs.items():
             try:
@@ -1197,18 +1218,99 @@ async def get_answer_logs(
                                 "version": int(version),
                             })
                     
+                    # Get AI evaluation for this question
+                    question_ai_eval = ai_evaluation.get(str(question_index)) or ai_evaluation.get(question_index)
+                    ai_score = None
+                    ai_feedback = None
+                    if question_ai_eval and isinstance(question_ai_eval, dict):
+                        ai_score = question_ai_eval.get("score")
+                        ai_feedback = question_ai_eval.get("feedback")
+                    
+                    # For MCQ questions, check if answer is correct
+                    is_mcq_correct = None
+                    if question.get("type") == "MCQ":
+                        correct_answer = question.get("correctAnswer", "")
+                        # Get the last answer from logs
+                        if serialized_logs and len(serialized_logs) > 0:
+                            last_log = serialized_logs[-1]  # Last version
+                            candidate_answer = last_log.get("answer", "").strip()
+                            is_mcq_correct = (candidate_answer == correct_answer) if correct_answer else None
+                    
                     formatted_logs.append({
                         "questionIndex": question_index,
                         "questionText": str(question.get("questionText", "")),
                         "questionType": str(question.get("type", "")),
                         "logs": serialized_logs,  # Already in order (version 1, 2, 3, etc.)
+                        "aiScore": ai_score,  # AI evaluated score (for last version)
+                        "aiFeedback": ai_feedback,
+                        "maxScore": question.get("score", 5),
+                        "isMcqCorrect": is_mcq_correct,  # For MCQ: True/False, for others: None
+                        "correctAnswer": question.get("correctAnswer") if question.get("type") == "MCQ" else None,
+                        "options": question.get("options", []) if question.get("type") == "MCQ" else None,  # MCQ options
                     })
+                    questions_with_logs.add(question_index)
             except (ValueError, TypeError) as e:
                 logger.warning(f"Invalid question index in logs: {question_index_str}, error: {e}")
                 continue
             except Exception as e:
                 logger.warning(f"Error processing log entry for question {question_index_str}: {e}")
                 continue
+
+        # Add questions that don't have logs but have submitted answers (especially MCQ)
+        # Get submission time from candidate response
+        submission_time = None
+        if isinstance(candidate_responses, dict):
+            candidate_response = candidate_responses.get(candidate_key, {})
+            if isinstance(candidate_response, dict):
+                submitted_at = candidate_response.get("submittedAt")
+                if submitted_at:
+                    submission_time = submitted_at
+        if not submission_time:
+            submission_time = datetime.now(timezone.utc).isoformat()
+        
+        for idx, question in enumerate(all_questions):
+            if idx not in questions_with_logs and isinstance(question, dict):
+                # Check if there's a submitted answer for this question
+                submitted_answer = submitted_answers.get(idx)
+                if submitted_answer is not None:
+                    # Create a log entry from submitted answer
+                    serialized_logs = []
+                    if submitted_answer:
+                        # Create a single log entry for the submitted answer
+                        serialized_logs.append({
+                            "answer": str(submitted_answer),
+                            "questionType": str(question.get("type", "")),
+                            "timestamp": submission_time,
+                            "version": 1,
+                        })
+                    
+                    # Get AI evaluation for this question
+                    question_ai_eval = ai_evaluation.get(str(idx)) or ai_evaluation.get(idx)
+                    ai_score = None
+                    ai_feedback = None
+                    if question_ai_eval and isinstance(question_ai_eval, dict):
+                        ai_score = question_ai_eval.get("score")
+                        ai_feedback = question_ai_eval.get("feedback")
+                    
+                    # For MCQ questions, check if answer is correct
+                    is_mcq_correct = None
+                    if question.get("type") == "MCQ":
+                        correct_answer = question.get("correctAnswer", "")
+                        if submitted_answer:
+                            is_mcq_correct = (str(submitted_answer).strip() == correct_answer) if correct_answer else None
+                    
+                    formatted_logs.append({
+                        "questionIndex": idx,
+                        "questionText": str(question.get("questionText", "")),
+                        "questionType": str(question.get("type", "")),
+                        "logs": serialized_logs,
+                        "aiScore": ai_score,
+                        "aiFeedback": ai_feedback,
+                        "maxScore": question.get("score", 5),
+                        "isMcqCorrect": is_mcq_correct,
+                        "correctAnswer": question.get("correctAnswer") if question.get("type") == "MCQ" else None,
+                        "options": question.get("options", []) if question.get("type") == "MCQ" else None,
+                    })
 
         # Sort by question index
         formatted_logs.sort(key=lambda x: x["questionIndex"])
@@ -1247,6 +1349,11 @@ async def get_candidate_results(
             "notAttempted": response.get("notAttempted", 0),
             "correctAnswers": response.get("correctAnswers", 0),
             "submittedAt": response.get("submittedAt"),
+            # AI evaluation data
+            "aiScore": response.get("aiScore", 0),
+            "percentageScored": response.get("percentageScored", 0),
+            "passPercentage": response.get("passPercentage"),
+            "passed": response.get("passed", False),
         })
     
     return success_response("Candidate results fetched successfully", results)

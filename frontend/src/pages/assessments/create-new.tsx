@@ -35,6 +35,7 @@ export default function CreateNewAssessmentPage() {
   const [error, setError] = useState<string | null>(null);
   const [finalTitle, setFinalTitle] = useState("");
   const [finalDescription, setFinalDescription] = useState("");
+  const [passPercentage, setPassPercentage] = useState<number>(75);
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [candidates, setCandidates] = useState<Array<{ email: string; name: string }>>([]);
@@ -43,8 +44,13 @@ export default function CreateNewAssessmentPage() {
   const [assessmentUrl, setAssessmentUrl] = useState<string | null>(null);
   const [questionTypeTimes, setQuestionTypeTimes] = useState<{ [key: string]: number }>({});
   const [enablePerSectionTimers, setEnablePerSectionTimers] = useState<boolean>(true); // Default to enabled
+  const [hasVisitedConfigureStation, setHasVisitedConfigureStation] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [hasVisitedReviewStation, setHasVisitedReviewStation] = useState(false);
+  const [isConfigureEditMode, setIsConfigureEditMode] = useState(false);
 
   const sliderRef = useRef<HTMLDivElement>(null);
+  const originalTopicConfigsRef = useRef<Topic[]>([]);
   const minHandleRef = useRef<HTMLDivElement>(null);
   const maxHandleRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
@@ -64,6 +70,8 @@ export default function CreateNewAssessmentPage() {
 
   // Handle experience range slider
   useEffect(() => {
+    // Only initialize slider when on Station 1
+    if (currentStation !== 1) return;
     if (!sliderRef.current || !minHandleRef.current || !maxHandleRef.current) return;
 
     const slider = sliderRef.current;
@@ -133,7 +141,7 @@ export default function CreateNewAssessmentPage() {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
-  }, []);
+  }, [currentStation, experienceMin, experienceMax]);
 
   const handleGenerateTopicCards = async () => {
     if (!jobDesignation.trim()) {
@@ -241,13 +249,62 @@ export default function CreateNewAssessmentPage() {
     setTopicConfigs(topicConfigs.filter((_, i) => i !== index));
   };
 
-  const handleNextToStation2 = () => {
+  const handleNextToStation2 = async () => {
+    // If topics haven't been generated yet, generate them first
     if (topics.length === 0) {
-      setError("Please generate topics first");
-      return;
+      if (selectedSkills.length === 0) {
+        setError("Please select at least one skill to assess");
+        return;
+      }
+      
+      setLoading(true);
+      setError(null);
+
+      try {
+        const response = await axios.post("/api/assessments/create-from-job-designation", {
+          jobDesignation: jobDesignation.trim(),
+          selectedSkills: selectedSkills,
+          experienceMin: experienceMin.toString(),
+          experienceMax: experienceMax.toString(),
+        });
+
+        if (response.data?.success) {
+          const data = response.data.data;
+          setTopics(data.assessment.topics.map((t: any) => t.topic));
+          setAvailableQuestionTypes(data.questionTypes || QUESTION_TYPES);
+          setAssessmentId(data.assessment._id || data.assessment.id);
+          const newTopicConfigs = data.assessment.topics.map((t: any) => ({
+            topic: t.topic,
+            questionType: t.questionTypes?.[0] || data.questionTypes?.[0] || QUESTION_TYPES[0],
+            difficulty: t.difficulty || "Medium",
+            numQuestions: 1,
+          }));
+          setTopicConfigs(newTopicConfigs);
+          // After generating topics, navigate to Station 2
+          setError(null);
+          setHasVisitedConfigureStation(true);
+          if (!hasVisitedReviewStation) {
+            originalTopicConfigsRef.current = JSON.parse(JSON.stringify(newTopicConfigs));
+          }
+          setCurrentStation(2);
+        } else {
+          setError("Failed to generate topics");
+        }
+      } catch (err: any) {
+        console.error("Error generating topics:", err);
+        setError(err.response?.data?.message || err.message || "Failed to generate topics");
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      // Topics already generated, just navigate
+      setError(null);
+      setHasVisitedConfigureStation(true);
+      if (!hasVisitedReviewStation) {
+        originalTopicConfigsRef.current = JSON.parse(JSON.stringify(topicConfigs));
+      }
+      setCurrentStation(2);
     }
-    setError(null);
-    setCurrentStation(2);
   };
 
   const handleNextToStation3 = async () => {
@@ -274,33 +331,85 @@ export default function CreateNewAssessmentPage() {
     // Update topicConfigs to only include valid topics
     setTopicConfigs(validConfigs);
 
-    setGenerating(true);
-    setError(null);
+    // Check if we need to regenerate questions
+    // Only regenerate if:
+    // 1. User has visited Review station (came back from Review)
+    // 2. Edit mode was active
+    // 3. Changes were made (compare with original configs)
+    const shouldRegenerate = hasVisitedReviewStation && isConfigureEditMode && 
+      JSON.stringify(validConfigs) !== JSON.stringify(originalTopicConfigsRef.current);
 
-    try {
-      const response = await axios.post("/api/assessments/generate-questions-from-config", {
-        assessmentId,
-        skill: selectedSkills.join(", "),
-        topics: topicConfigs,
-      });
+    if (shouldRegenerate) {
+      setGenerating(true);
+      setError(null);
 
-      if (response.data?.success) {
-        const allQuestions: any[] = [];
-        response.data.data.topics.forEach((topic: any) => {
-          if (topic.questions && topic.questions.length > 0) {
-            allQuestions.push(...topic.questions);
-          }
+      try {
+        const response = await axios.post("/api/assessments/generate-questions-from-config", {
+          assessmentId,
+          skill: selectedSkills.join(", "),
+          topics: validConfigs,
         });
-        setQuestions(allQuestions);
-        setCurrentStation(3);
-      } else {
-        setError("Failed to generate questions");
+
+        if (response.data?.success) {
+          const allQuestions: any[] = [];
+          response.data.data.topics.forEach((topic: any) => {
+            if (topic.questions && topic.questions.length > 0) {
+              allQuestions.push(...topic.questions);
+            }
+          });
+          setQuestions(allQuestions);
+          // Update original configs after regeneration
+          originalTopicConfigsRef.current = JSON.parse(JSON.stringify(validConfigs));
+          setIsConfigureEditMode(false);
+          setHasVisitedReviewStation(false);
+          setCurrentStation(3);
+        } else {
+          setError("Failed to generate questions");
+        }
+      } catch (err: any) {
+        console.error("Error generating questions:", err);
+        setError(err.response?.data?.message || err.message || "Failed to generate questions");
+      } finally {
+        setGenerating(false);
       }
-    } catch (err: any) {
-      console.error("Error generating questions:", err);
-      setError(err.response?.data?.message || err.message || "Failed to generate questions");
-    } finally {
-      setGenerating(false);
+    } else {
+      // No regeneration needed
+      if (!hasVisitedReviewStation) {
+        // First time generating, save original configs
+        originalTopicConfigsRef.current = JSON.parse(JSON.stringify(validConfigs));
+        setGenerating(true);
+        setError(null);
+
+        try {
+          const response = await axios.post("/api/assessments/generate-questions-from-config", {
+            assessmentId,
+            skill: selectedSkills.join(", "),
+            topics: validConfigs,
+          });
+
+          if (response.data?.success) {
+            const allQuestions: any[] = [];
+            response.data.data.topics.forEach((topic: any) => {
+              if (topic.questions && topic.questions.length > 0) {
+                allQuestions.push(...topic.questions);
+              }
+            });
+            setQuestions(allQuestions);
+            setCurrentStation(3);
+          } else {
+            setError("Failed to generate questions");
+          }
+        } catch (err: any) {
+          console.error("Error generating questions:", err);
+          setError(err.response?.data?.message || err.message || "Failed to generate questions");
+        } finally {
+          setGenerating(false);
+        }
+      } else {
+        // Returning from Review without changes, just proceed
+        setIsConfigureEditMode(false);
+        setCurrentStation(3);
+      }
     }
   };
 
@@ -428,13 +537,14 @@ export default function CreateNewAssessmentPage() {
         }
       }
 
-      // Then finalize with questionTypeTimes and enablePerSectionTimers flag
+      // Then finalize with questionTypeTimes, enablePerSectionTimers flag, and passPercentage
       const response = await axios.post("/api/assessments/finalize", {
         assessmentId,
         title: finalTitle.trim(),
         description: finalDescription.trim() || undefined,
         questionTypeTimes: enablePerSectionTimers ? questionTypeTimes : undefined,
         enablePerSectionTimers: enablePerSectionTimers,
+        passPercentage: passPercentage,
       });
 
       if (response.data?.success) {
@@ -497,7 +607,7 @@ export default function CreateNewAssessmentPage() {
                   position: "absolute",
                   top: "50%",
                   left: 0,
-                  width: currentStation >= 2 ? "25%" : currentStation >= 3 ? "50%" : currentStation >= 4 ? "75%" : currentStation >= 5 ? "100%" : "0%",
+                  width: currentStation >= 5 ? "100%" : currentStation >= 4 ? "75%" : currentStation >= 3 ? "50%" : currentStation >= 2 ? "25%" : "0%",
                   height: "3px",
                   backgroundColor: "#6953a3",
                   zIndex: 1,
@@ -591,8 +701,14 @@ export default function CreateNewAssessmentPage() {
                     type="button"
                     onClick={handleGenerateTopicCards}
                     className="btn-primary"
-                    disabled={loadingCards || !jobDesignation.trim()}
-                    style={{ marginTop: 0, whiteSpace: "nowrap", padding: "0.75rem 1.5rem" }}
+                    disabled={loadingCards || !jobDesignation.trim() || (hasVisitedConfigureStation && !isEditMode)}
+                    style={{ 
+                      marginTop: 0, 
+                      whiteSpace: "nowrap", 
+                      padding: "0.75rem 1.5rem",
+                      opacity: (hasVisitedConfigureStation && !isEditMode) ? 0.5 : 1,
+                      cursor: (hasVisitedConfigureStation && !isEditMode) ? "not-allowed" : "pointer",
+                    }}
                   >
                     {loadingCards ? "Loading..." : "Get Skills"}
                   </button>
@@ -600,7 +716,7 @@ export default function CreateNewAssessmentPage() {
               </div>
 
               {/* Topic Cards Display */}
-              {topicCards.length > 0 && (
+              {topicCards.length > 0 && (isEditMode || !hasVisitedConfigureStation) && (
                 <div style={{ marginBottom: "2rem" }}>
                   <label style={{ display: "block", marginBottom: "0.75rem", fontWeight: 600, color: "#1e293b" }}>
                     Related Technologies & Skills
@@ -611,17 +727,17 @@ export default function CreateNewAssessmentPage() {
                         key={card}
                         type="button"
                         onClick={() => handleCardClick(card)}
-                        disabled={selectedSkills.includes(card)}
+                        disabled={!isEditMode && selectedSkills.includes(card)}
                         style={{
                           padding: "0.5rem 1rem",
                           border: `1px solid ${selectedSkills.includes(card) ? "#6953a3" : "#e2e8f0"}`,
                           borderRadius: "0.5rem",
                           backgroundColor: selectedSkills.includes(card) ? "#eff6ff" : "#ffffff",
                           color: selectedSkills.includes(card) ? "#1e40af" : "#475569",
-                          cursor: selectedSkills.includes(card) ? "default" : "pointer",
+                          cursor: (!isEditMode && selectedSkills.includes(card)) ? "default" : "pointer",
                           fontSize: "0.875rem",
                           fontWeight: selectedSkills.includes(card) ? 600 : 400,
-                          opacity: selectedSkills.includes(card) ? 0.7 : 1,
+                          opacity: (!isEditMode && selectedSkills.includes(card)) ? 0.7 : 1,
                         }}
                       >
                         {card} {selectedSkills.includes(card) && "✓"}
@@ -654,55 +770,59 @@ export default function CreateNewAssessmentPage() {
                         }}
                       >
                         {skill}
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveSkill(skill)}
-                          style={{
-                            background: "none",
-                            border: "none",
-                            color: "#1e40af",
-                            cursor: "pointer",
-                            padding: 0,
-                            fontSize: "1.125rem",
-                            lineHeight: 1,
-                          }}
-                        >
-                          ×
-                        </button>
+                        {(isEditMode || !hasVisitedConfigureStation) && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSkill(skill)}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              color: "#1e40af",
+                              cursor: "pointer",
+                              padding: 0,
+                              fontSize: "1.125rem",
+                              lineHeight: 1,
+                            }}
+                          >
+                            ×
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
                 )}
-                <div style={{ display: "flex", gap: "0.5rem" }}>
-                  <input
-                    type="text"
-                    value={manualSkillInput}
-                    onChange={(e) => setManualSkillInput(e.target.value)}
-                    onKeyPress={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleAddManualSkill();
-                      }
-                    }}
-                    placeholder="Enter technology name (e.g., Python, React, HTML)"
-                    style={{
-                      flex: 1,
-                      padding: "0.75rem",
-                      border: "1px solid #e2e8f0",
-                      borderRadius: "0.5rem",
-                      fontSize: "1rem",
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAddManualSkill}
-                    className="btn-secondary"
-                    disabled={!manualSkillInput.trim()}
-                    style={{ marginTop: 0, whiteSpace: "nowrap", padding: "0.75rem 1.5rem" }}
-                  >
-                    Add
-                  </button>
-                </div>
+                {(isEditMode || !hasVisitedConfigureStation) && (
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <input
+                      type="text"
+                      value={manualSkillInput}
+                      onChange={(e) => setManualSkillInput(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleAddManualSkill();
+                        }
+                      }}
+                      placeholder="Enter technology name (e.g., Python, React, HTML)"
+                      style={{
+                        flex: 1,
+                        padding: "0.75rem",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: "0.5rem",
+                        fontSize: "1rem",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddManualSkill}
+                      className="btn-secondary"
+                      disabled={!manualSkillInput.trim()}
+                      style={{ marginTop: 0, whiteSpace: "nowrap", padding: "0.75rem 1.5rem" }}
+                    >
+                      Add
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div style={{ marginBottom: "2rem" }}>
@@ -719,7 +839,8 @@ export default function CreateNewAssessmentPage() {
                     borderRadius: "3px",
                     marginTop: "2rem",
                     marginBottom: "1rem",
-                    cursor: "pointer",
+                    cursor: (isEditMode || !hasVisitedConfigureStation) ? "pointer" : "default",
+                    opacity: (isEditMode || !hasVisitedConfigureStation) ? 1 : 0.6,
                   }}
                 >
                   <div
@@ -732,10 +853,11 @@ export default function CreateNewAssessmentPage() {
                       borderRadius: "50%",
                       top: "50%",
                       transform: "translate(-50%, -50%)",
-                      cursor: "grab",
+                      cursor: (isEditMode || !hasVisitedConfigureStation) ? "grab" : "default",
                       zIndex: 3,
                       userSelect: "none",
                       touchAction: "none",
+                      pointerEvents: (isEditMode || !hasVisitedConfigureStation) ? "auto" : "none",
                     }}
                   />
                   <div
@@ -748,10 +870,11 @@ export default function CreateNewAssessmentPage() {
                       borderRadius: "50%",
                       top: "50%",
                       transform: "translate(-50%, -50%)",
-                      cursor: "grab",
+                      cursor: (isEditMode || !hasVisitedConfigureStation) ? "grab" : "default",
                       zIndex: 3,
                       userSelect: "none",
                       touchAction: "none",
+                      pointerEvents: (isEditMode || !hasVisitedConfigureStation) ? "auto" : "none",
                     }}
                   />
                 </div>
@@ -765,19 +888,59 @@ export default function CreateNewAssessmentPage() {
               </div>
 
 
+              {hasVisitedConfigureStation && !isEditMode && (
+                <div style={{ marginBottom: "1.5rem", display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditMode(true)}
+                    className="btn-secondary"
+                    style={{ marginTop: 0 }}
+                  >
+                    Edit
+                  </button>
+                </div>
+              )}
+
               <div style={{ display: "flex", gap: "1rem", marginTop: "2rem" }}>
-                <button
-                  type="button"
-                  onClick={handleGenerateTopics}
-                  className="btn-primary"
-                  disabled={loading || selectedSkills.length === 0}
-                  style={{ flex: 1 }}
-                >
-                  {loading ? "Generating Topics..." : "Generate Topics"}
-                </button>
-                {topics.length > 0 && (
-                  <button type="button" onClick={handleNextToStation2} className="btn-primary" style={{ flex: 1 }}>
-                    Next
+                {isEditMode ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsEditMode(false);
+                        setError(null);
+                      }}
+                      className="btn-secondary"
+                      style={{ flex: 1 }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (selectedSkills.length === 0) {
+                          setError("Please select at least one skill to assess");
+                          return;
+                        }
+                        setIsEditMode(false);
+                        await handleGenerateTopics();
+                      }}
+                      className="btn-primary"
+                      disabled={loading || selectedSkills.length === 0}
+                      style={{ flex: 1 }}
+                    >
+                      {loading ? "Regenerating Topics..." : "Regenerate Topics"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleNextToStation2}
+                    className="btn-primary"
+                    disabled={loading || selectedSkills.length === 0 || !jobDesignation.trim()}
+                    style={{ flex: 1 }}
+                  >
+                    {loading ? "Generating Topics..." : "Next"}
                   </button>
                 )}
               </div>
@@ -793,6 +956,23 @@ export default function CreateNewAssessmentPage() {
               <p style={{ color: "#6b6678", marginBottom: "2rem", fontSize: "1rem" }}>
                 Configure question type, difficulty, and number of questions for each topic. You can also add your own topics.
               </p>
+
+              {hasVisitedReviewStation && !isConfigureEditMode && (
+                <div style={{ marginBottom: "1.5rem", display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsConfigureEditMode(true);
+                      // Save current configs as original when entering edit mode
+                      originalTopicConfigsRef.current = JSON.parse(JSON.stringify(topicConfigs));
+                    }}
+                    className="btn-secondary"
+                    style={{ marginTop: 0 }}
+                  >
+                    Edit
+                  </button>
+                </div>
+              )}
 
               <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -824,12 +1004,16 @@ export default function CreateNewAssessmentPage() {
                             value={config.topic}
                             onChange={(e) => handleUpdateTopicConfig(index, "topic", e.target.value)}
                             placeholder="Enter topic name"
+                            disabled={hasVisitedReviewStation && !isConfigureEditMode}
                             style={{
                               width: "100%",
                               padding: "0.5rem",
                               border: "1px solid #e2e8f0",
                               borderRadius: "0.5rem",
                               fontSize: "0.875rem",
+                              backgroundColor: (hasVisitedReviewStation && !isConfigureEditMode) ? "#f1f5f9" : "#ffffff",
+                              cursor: (hasVisitedReviewStation && !isConfigureEditMode) ? "not-allowed" : "text",
+                              opacity: (hasVisitedReviewStation && !isConfigureEditMode) ? 0.6 : 1,
                             }}
                           />
                         </td>
@@ -837,12 +1021,16 @@ export default function CreateNewAssessmentPage() {
                           <select
                             value={config.questionType}
                             onChange={(e) => handleUpdateTopicConfig(index, "questionType", e.target.value)}
+                            disabled={hasVisitedReviewStation && !isConfigureEditMode}
                             style={{
                               width: "100%",
                               padding: "0.5rem",
                               border: "1px solid #e2e8f0",
                               borderRadius: "0.5rem",
                               fontSize: "0.875rem",
+                              backgroundColor: (hasVisitedReviewStation && !isConfigureEditMode) ? "#f1f5f9" : "#ffffff",
+                              cursor: (hasVisitedReviewStation && !isConfigureEditMode) ? "not-allowed" : "pointer",
+                              opacity: (hasVisitedReviewStation && !isConfigureEditMode) ? 0.6 : 1,
                             }}
                           >
                             {availableQuestionTypes.map((type) => (
@@ -856,12 +1044,16 @@ export default function CreateNewAssessmentPage() {
                           <select
                             value={config.difficulty}
                             onChange={(e) => handleUpdateTopicConfig(index, "difficulty", e.target.value)}
+                            disabled={hasVisitedReviewStation && !isConfigureEditMode}
                             style={{
                               width: "100%",
                               padding: "0.5rem",
                               border: "1px solid #e2e8f0",
                               borderRadius: "0.5rem",
                               fontSize: "0.875rem",
+                              backgroundColor: (hasVisitedReviewStation && !isConfigureEditMode) ? "#f1f5f9" : "#ffffff",
+                              cursor: (hasVisitedReviewStation && !isConfigureEditMode) ? "not-allowed" : "pointer",
+                              opacity: (hasVisitedReviewStation && !isConfigureEditMode) ? 0.6 : 1,
                             }}
                           >
                             {DIFFICULTY_LEVELS.map((level) => (
@@ -880,12 +1072,16 @@ export default function CreateNewAssessmentPage() {
                             onChange={(e) =>
                               handleUpdateTopicConfig(index, "numQuestions", parseInt(e.target.value) || 1)
                             }
+                            disabled={hasVisitedReviewStation && !isConfigureEditMode}
                             style={{
                               width: "100%",
                               padding: "0.5rem",
                               border: "1px solid #e2e8f0",
                               borderRadius: "0.5rem",
                               fontSize: "0.875rem",
+                              backgroundColor: (hasVisitedReviewStation && !isConfigureEditMode) ? "#f1f5f9" : "#ffffff",
+                              cursor: (hasVisitedReviewStation && !isConfigureEditMode) ? "not-allowed" : "text",
+                              opacity: (hasVisitedReviewStation && !isConfigureEditMode) ? 0.6 : 1,
                             }}
                           />
                         </td>
@@ -893,13 +1089,15 @@ export default function CreateNewAssessmentPage() {
                           <button
                             type="button"
                             onClick={() => handleRemoveTopic(index)}
+                            disabled={hasVisitedReviewStation && !isConfigureEditMode}
                             style={{
                               background: "none",
                               border: "none",
-                              color: "#ef4444",
-                              cursor: "pointer",
+                              color: (hasVisitedReviewStation && !isConfigureEditMode) ? "#94a3b8" : "#ef4444",
+                              cursor: (hasVisitedReviewStation && !isConfigureEditMode) ? "not-allowed" : "pointer",
                               fontSize: "0.875rem",
                               padding: "0.25rem 0.5rem",
+                              opacity: (hasVisitedReviewStation && !isConfigureEditMode) ? 0.5 : 1,
                             }}
                           >
                             Remove
@@ -916,30 +1114,68 @@ export default function CreateNewAssessmentPage() {
                   type="button"
                   onClick={handleAddNewTopic}
                   className="btn-secondary"
-                  style={{ marginTop: 0 }}
+                  disabled={hasVisitedReviewStation && !isConfigureEditMode}
+                  style={{ 
+                    marginTop: 0,
+                    opacity: (hasVisitedReviewStation && !isConfigureEditMode) ? 0.5 : 1,
+                    cursor: (hasVisitedReviewStation && !isConfigureEditMode) ? "not-allowed" : "pointer",
+                  }}
                 >
                   + Add Skill
                 </button>
               </div>
 
               <div style={{ display: "flex", gap: "1rem", marginTop: "2rem" }}>
-                <button
-                  type="button"
-                  onClick={() => setCurrentStation(1)}
-                  className="btn-secondary"
-                  style={{ flex: 1 }}
-                >
-                  Back
-                </button>
-                <button
-                  type="button"
-                  onClick={handleNextToStation3}
-                  className="btn-primary"
-                  disabled={generating}
-                  style={{ flex: 1 }}
-                >
-                  {generating ? "Generating Questions..." : "Next"}
-                </button>
+                {isConfigureEditMode ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsConfigureEditMode(false);
+                        // Revert to original configs if canceling
+                        setTopicConfigs(JSON.parse(JSON.stringify(originalTopicConfigsRef.current)));
+                        setError(null);
+                      }}
+                      className="btn-secondary"
+                      style={{ flex: 1 }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleNextToStation3}
+                      className="btn-primary"
+                      disabled={generating}
+                      style={{ flex: 1 }}
+                    >
+                      {generating ? "Regenerating Questions..." : "Next"}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsEditMode(false);
+                        setIsConfigureEditMode(false);
+                        setCurrentStation(1);
+                      }}
+                      className="btn-secondary"
+                      style={{ flex: 1 }}
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleNextToStation3}
+                      className="btn-primary"
+                      disabled={generating}
+                      style={{ flex: 1 }}
+                    >
+                      {generating ? "Generating Questions..." : "Next"}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -1293,10 +1529,36 @@ export default function CreateNewAssessmentPage() {
                     }}
                   />
                 </div>
+                <div style={{ marginBottom: "1.5rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: 600, color: "#1e293b" }}>
+                    Pass Percentage (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={passPercentage}
+                    onChange={(e) => setPassPercentage(parseFloat(e.target.value) || 0)}
+                    placeholder="Enter pass percentage (e.g., 75)"
+                    style={{
+                      width: "100%",
+                      padding: "0.75rem",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "0.5rem",
+                      fontSize: "1rem",
+                    }}
+                  />
+                  <p style={{ fontSize: "0.875rem", color: "#64748b", marginTop: "0.5rem" }}>
+                    Candidates need to score at least {passPercentage}% to pass the assessment.
+                  </p>
+                </div>
                 <div style={{ display: "flex", gap: "1rem" }}>
                   <button
                     type="button"
-                    onClick={() => setCurrentStation(2)}
+                    onClick={() => {
+                      setHasVisitedReviewStation(true);
+                      setCurrentStation(2);
+                    }}
                     className="btn-secondary"
                     style={{ flex: 1 }}
                   >

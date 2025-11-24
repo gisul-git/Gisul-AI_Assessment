@@ -124,6 +124,7 @@ class FinalizeAssessmentRequest(BaseModel):
     description: Optional[str] = None
     questionTypeTimes: Optional[Dict[str, int]] = None  # Time in minutes per question type
     enablePerSectionTimers: Optional[bool] = True  # Whether to enable per-section timers
+    passPercentage: Optional[float] = Field(default=None, ge=0, le=100)  # Pass percentage (0-100)
 
 
 class LogAnswerRequest(BaseModel):

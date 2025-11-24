@@ -11,6 +11,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from ..db.mongo import get_db
 from ..schemas.assessment import LogAnswerRequest
+from ..services.ai import evaluate_answer_with_ai
 from ..utils.mongo import to_object_id
 from ..utils.responses import success_response
 
@@ -707,26 +708,113 @@ async def submit_candidate_answers(
                 if isinstance(question, dict):
                     all_questions.append(question)
 
-        # Calculate score
+        # Get answer logs to use the last answer for AI evaluation
+        answer_logs = assessment.get("answerLogs", {})
+        candidate_key = f"{email}_{name}"
+        candidate_logs = {}
+        if isinstance(answer_logs, dict):
+            candidate_logs = answer_logs.get(candidate_key, {})
+            if not isinstance(candidate_logs, dict):
+                candidate_logs = {}
+
+        # Calculate score (MCQ only for now)
         total_score = 0
         max_score = 0
         correct_answers = 0
         attempted = len(answers) if isinstance(answers, list) else 0
         not_attempted = len(all_questions) - attempted - (len(skipped_questions) if isinstance(skipped_questions, list) else 0)
 
+        # AI evaluation results (using string keys for MongoDB compatibility)
+        ai_evaluation_results = {}  # {"questionIndex": {score, feedback, evaluation}}
+        total_ai_score = 0
+
         for idx, question in enumerate(all_questions):
             if not isinstance(question, dict):
                 continue
-            max_score += question.get("score", 5)
+            question_max_score = question.get("score", 5)
+            max_score += question_max_score
             answer_obj = next((a for a in answers if isinstance(a, dict) and a.get("questionIndex") == idx), None)
+            
+            # Get the last answer log entry for this question
+            question_key = str(idx)
+            last_answer_log = None
+            if question_key in candidate_logs:
+                log_entries = candidate_logs[question_key]
+                if isinstance(log_entries, list) and len(log_entries) > 0:
+                    # Find the entry with the highest version (last answer)
+                    last_answer_log = max(log_entries, key=lambda x: x.get("version", 0) if isinstance(x, dict) else 0)
+            
+            # Use last answer log if available, otherwise use submitted answer
+            if last_answer_log and isinstance(last_answer_log, dict):
+                candidate_answer = last_answer_log.get("answer", "").strip()
+            elif answer_obj:
+                candidate_answer = answer_obj.get("answer", "").strip()
+            else:
+                candidate_answer = ""
         
-            if answer_obj:
-                if question.get("type") == "MCQ":
-                    if answer_obj.get("answer") == question.get("correctAnswer"):
-                        total_score += question.get("score", 5)
+            if candidate_answer or answer_obj:
+                question_type = question.get("type", "")
+                
+                if question_type == "MCQ":
+                    # MCQ: Check against correct answer (use submitted answer for MCQ)
+                    if answer_obj and answer_obj.get("answer", "").strip() == question.get("correctAnswer"):
+                        total_score += question_max_score
                         correct_answers += 1
-                # For subjective/descriptive, we'll need manual evaluation later
-                # For now, just mark as attempted
+                        # Store MCQ score in AI evaluation results for consistency
+                        ai_evaluation_results[str(idx)] = {
+                            "score": question_max_score,
+                            "feedback": "Correct answer",
+                            "evaluation": "MCQ answer matched the correct option."
+                        }
+                        total_ai_score += question_max_score
+                    else:
+                        ai_evaluation_results[str(idx)] = {
+                            "score": 0,
+                            "feedback": "Incorrect answer",
+                            "evaluation": "MCQ answer did not match the correct option."
+                        }
+                else:
+                    # Non-MCQ: Evaluate with AI using last answer log
+                    if candidate_answer:
+                        try:
+                            evaluation_result = await evaluate_answer_with_ai(
+                                question=question,
+                                candidate_answer=candidate_answer,
+                                max_score=question_max_score
+                            )
+                            ai_score = evaluation_result.get("score", 0)
+                            ai_evaluation_results[str(idx)] = {
+                                "score": ai_score,
+                                "feedback": evaluation_result.get("feedback", ""),
+                                "evaluation": evaluation_result.get("evaluation", "")
+                            }
+                            total_ai_score += ai_score
+                        except Exception as eval_error:
+                            logger.error(f"Error evaluating answer for question {idx}: {eval_error}")
+                            # If AI evaluation fails, give 0 score
+                            ai_evaluation_results[str(idx)] = {
+                                "score": 0,
+                                "feedback": "Evaluation could not be completed.",
+                                "evaluation": "AI evaluation service error."
+                            }
+                    else:
+                        # Empty answer
+                        ai_evaluation_results[str(idx)] = {
+                            "score": 0,
+                            "feedback": "No answer provided",
+                            "evaluation": "Candidate did not provide an answer."
+                        }
+
+        # Calculate percentage
+        percentage_scored = (total_ai_score / max_score * 100) if max_score > 0 else 0
+        
+        # Get pass percentage from assessment
+        pass_percentage = assessment.get("passPercentage")
+        if pass_percentage is None:
+            pass_percentage = 0  # Default to 0 if not set
+        
+        # Determine pass/fail
+        passed = percentage_scored >= pass_percentage
 
         # Store candidate response
         candidate_responses = assessment.get("candidateResponses", {})
@@ -739,12 +827,18 @@ async def submit_candidate_answers(
             "name": name,
             "answers": answers if isinstance(answers, list) else [],
             "skippedQuestions": skipped_questions if isinstance(skipped_questions, list) else [],
-            "score": total_score,
+            "score": total_score,  # Keep original MCQ score for backward compatibility
             "maxScore": max_score,
             "attempted": attempted,
             "notAttempted": not_attempted,
             "correctAnswers": correct_answers,
             "submittedAt": datetime.now(timezone.utc).isoformat(),
+            # AI evaluation data
+            "aiEvaluation": ai_evaluation_results,
+            "aiScore": total_ai_score,
+            "percentageScored": round(percentage_scored, 2),
+            "passPercentage": pass_percentage,
+            "passed": passed,
         }
         assessment["candidateResponses"] = candidate_responses
         await db.assessments.replace_one({"_id": oid}, assessment)
@@ -757,6 +851,9 @@ async def submit_candidate_answers(
                 "attempted": attempted,
                 "notAttempted": not_attempted,
                 "correctAnswers": correct_answers,
+                "aiScore": total_ai_score,
+                "percentageScored": round(percentage_scored, 2),
+                "passed": passed,
             }
         )
     except HTTPException:

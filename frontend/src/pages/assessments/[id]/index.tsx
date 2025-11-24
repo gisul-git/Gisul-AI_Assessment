@@ -14,6 +14,10 @@ interface CandidateResult {
   notAttempted: number;
   correctAnswers: number;
   submittedAt: string;
+  aiScore?: number;
+  percentageScored?: number;
+  passPercentage?: number;
+  passed?: boolean;
 }
 
 interface AnswerLog {
@@ -28,6 +32,12 @@ interface QuestionLog {
   questionText: string;
   questionType: string;
   logs: AnswerLog[];
+  aiScore?: number;
+  aiFeedback?: string;
+  maxScore?: number;
+  isMcqCorrect?: boolean;
+  correctAnswer?: string;
+  options?: string[];
 }
 
 export default function AssessmentDetailPage() {
@@ -252,16 +262,19 @@ export default function AssessmentDetailPage() {
                         Email
                       </th>
                       <th style={{ padding: "1rem", textAlign: "left", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
-                        Score
+                        AI Score
+                      </th>
+                      <th style={{ padding: "1rem", textAlign: "left", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
+                        Percentage
+                      </th>
+                      <th style={{ padding: "1rem", textAlign: "left", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
+                        Status
                       </th>
                       <th style={{ padding: "1rem", textAlign: "left", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
                         Attempted
                       </th>
                       <th style={{ padding: "1rem", textAlign: "left", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
                         Not Attempted
-                      </th>
-                      <th style={{ padding: "1rem", textAlign: "left", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
-                        Correct Answers
                       </th>
                       <th style={{ padding: "1rem", textAlign: "left", borderBottom: "2px solid #e2e8f0", fontWeight: 600, color: "#1e293b" }}>
                         Submitted At
@@ -278,20 +291,37 @@ export default function AssessmentDetailPage() {
                         <td style={{ padding: "1rem" }}>{result.email}</td>
                         <td style={{ padding: "1rem" }}>
                           <span style={{ fontWeight: 600, color: "#1e293b" }}>
-                            {result.score} / {result.maxScore}
+                            {result.aiScore !== undefined ? result.aiScore : result.score} / {result.maxScore}
                           </span>
-                          <span style={{ marginLeft: "0.5rem", color: "#64748b", fontSize: "0.875rem" }}>
-                            ({result.maxScore > 0 ? Math.round((result.score / result.maxScore) * 100) : 0}%)
+                        </td>
+                        <td style={{ padding: "1rem" }}>
+                          <span style={{ fontWeight: 600, color: "#1e293b" }}>
+                            {result.percentageScored !== undefined ? result.percentageScored.toFixed(2) : (result.maxScore > 0 ? Math.round((result.score / result.maxScore) * 100) : 0)}%
                           </span>
+                        </td>
+                        <td style={{ padding: "1rem" }}>
+                          {result.passed !== undefined ? (
+                            <span
+                              style={{
+                                padding: "0.25rem 0.75rem",
+                                borderRadius: "9999px",
+                                fontSize: "0.875rem",
+                                fontWeight: 600,
+                                backgroundColor: result.passed ? "#d1fae5" : "#fee2e2",
+                                color: result.passed ? "#065f46" : "#991b1b",
+                              }}
+                            >
+                              {result.passed ? "Pass" : "Fail"}
+                            </span>
+                          ) : (
+                            <span style={{ color: "#64748b" }}>N/A</span>
+                          )}
                         </td>
                         <td style={{ padding: "1rem" }}>
                           <span style={{ color: "#10b981", fontWeight: 600 }}>{result.attempted}</span>
                         </td>
                         <td style={{ padding: "1rem" }}>
                           <span style={{ color: "#ef4444", fontWeight: 600 }}>{result.notAttempted}</span>
-                        </td>
-                        <td style={{ padding: "1rem" }}>
-                          <span style={{ color: "#3b82f6", fontWeight: 600 }}>{result.correctAnswers}</span>
                         </td>
                         <td style={{ padding: "1rem", fontSize: "0.875rem", color: "#64748b" }}>
                           {result.submittedAt
@@ -429,6 +459,103 @@ export default function AssessmentDetailPage() {
                           <p style={{ color: "#1e293b", lineHeight: 1.6, margin: 0, fontSize: "0.9375rem" }}>
                             {questionLog.questionText}
                           </p>
+                          
+                          {/* MCQ Options Display */}
+                          {questionLog.questionType === "MCQ" && questionLog.options && questionLog.options.length > 0 && (
+                            <div style={{ marginTop: "1rem" }}>
+                              <h4 style={{ margin: 0, marginBottom: "0.75rem", fontSize: "0.875rem", color: "#64748b", fontWeight: 600 }}>
+                                Options:
+                              </h4>
+                              <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                                {questionLog.options.map((option, optIndex) => {
+                                  const optionLetter = String.fromCharCode(65 + optIndex); // A, B, C, D, etc.
+                                  const isSelected = questionLog.logs.length > 0 && questionLog.logs[questionLog.logs.length - 1]?.answer === optionLetter;
+                                  const isCorrect = optionLetter === questionLog.correctAnswer;
+                                  const showAsCorrect = isSelected && isCorrect;
+                                  const showAsWrong = isSelected && !isCorrect;
+                                  
+                                  return (
+                                    <div
+                                      key={optIndex}
+                                      style={{
+                                        padding: "0.75rem",
+                                        backgroundColor: showAsCorrect ? "#d1fae5" : showAsWrong ? "#fee2e2" : "#f8fafc",
+                                        border: `2px solid ${showAsCorrect ? "#10b981" : showAsWrong ? "#ef4444" : "#e2e8f0"}`,
+                                        borderRadius: "0.5rem",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "0.5rem",
+                                      }}
+                                    >
+                                      <span
+                                        style={{
+                                          fontWeight: 700,
+                                          color: showAsCorrect ? "#059669" : showAsWrong ? "#dc2626" : "#64748b",
+                                          fontSize: "0.875rem",
+                                          minWidth: "24px",
+                                        }}
+                                      >
+                                        {optionLetter}.
+                                      </span>
+                                      <span style={{ flex: 1, color: "#1e293b", fontSize: "0.875rem" }}>
+                                        {option}
+                                      </span>
+                                      {showAsCorrect && (
+                                        <span style={{ color: "#059669", fontWeight: 700, fontSize: "0.875rem" }}>
+                                          ✓ Correct
+                                        </span>
+                                      )}
+                                      {showAsWrong && (
+                                        <span style={{ color: "#dc2626", fontWeight: 700, fontSize: "0.875rem" }}>
+                                          ✗ Selected (Wrong)
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              {questionLog.isMcqCorrect !== undefined && (
+                                <div style={{ marginTop: "0.75rem", padding: "0.75rem", backgroundColor: questionLog.isMcqCorrect ? "#f0fdf4" : "#fef2f2", border: `1px solid ${questionLog.isMcqCorrect ? "#10b981" : "#ef4444"}`, borderRadius: "0.5rem" }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <span style={{ fontWeight: 600, color: questionLog.isMcqCorrect ? "#065f46" : "#991b1b", fontSize: "0.875rem" }}>
+                                      Answer Status:
+                                    </span>
+                                    <span style={{ fontWeight: 700, color: questionLog.isMcqCorrect ? "#059669" : "#dc2626", fontSize: "1rem" }}>
+                                      {questionLog.isMcqCorrect ? "✓ Correct" : "✗ Incorrect"}
+                                    </span>
+                                  </div>
+                                  {!questionLog.isMcqCorrect && questionLog.correctAnswer && (
+                                    <p style={{ marginTop: "0.5rem", marginBottom: 0, fontSize: "0.875rem", color: "#991b1b", fontWeight: 600 }}>
+                                      Correct Answer: {questionLog.correctAnswer}
+                                    </p>
+                                  )}
+                                  {questionLog.aiScore !== undefined && (
+                                    <p style={{ marginTop: "0.5rem", marginBottom: 0, fontSize: "0.875rem", color: questionLog.isMcqCorrect ? "#047857" : "#991b1b", fontWeight: 600 }}>
+                                      Score: {questionLog.aiScore} / {questionLog.maxScore || 5} points
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {/* AI Score for non-MCQ questions */}
+                          {questionLog.questionType !== "MCQ" && questionLog.aiScore !== undefined && (
+                            <div style={{ marginTop: "0.75rem", padding: "0.75rem", backgroundColor: "#f0fdf4", border: "1px solid #10b981", borderRadius: "0.5rem" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                <span style={{ fontWeight: 600, color: "#065f46", fontSize: "0.875rem" }}>
+                                  AI Evaluated Score (Last Version):
+                                </span>
+                                <span style={{ fontWeight: 700, color: "#059669", fontSize: "1rem" }}>
+                                  {questionLog.aiScore} / {questionLog.maxScore || 5} points
+                                </span>
+                              </div>
+                              {questionLog.aiFeedback && (
+                                <p style={{ marginTop: "0.5rem", marginBottom: 0, fontSize: "0.875rem", color: "#047857" }}>
+                                  {questionLog.aiFeedback}
+                                </p>
+                              )}
+                            </div>
+                          )}
                         </div>
 
                         <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid #e2e8f0" }}>
