@@ -183,44 +183,32 @@ export default function AssessmentDetailPage() {
 
         <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginBottom: "2rem" }}>
           {assessment.assessment?.status === "draft" && (
-            <>
-              <Link href={`/assessments/${id}/configure`}>
-                <button type="button" className="btn-secondary">
-                  Configure Topics
-                </button>
-              </Link>
-              <Link href={`/assessments/${id}/questions`}>
-                <button type="button" className="btn-primary">
-                  {totalQuestions > 0 ? "View Questions" : "Generate Questions"}
-                </button>
-              </Link>
-            </>
-          )}
-          {assessment.assessment?.status === "ready" && (
-            <Link href={`/assessments/${id}/questions`}>
+            <Link href="/assessments/create-new">
               <button type="button" className="btn-primary">
-                View Questions
+                Create
               </button>
             </Link>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              setShowResults(!showResults);
-              if (showResults) {
-                setSelectedCandidate(null);
-                setAnswerLogs([]);
-              }
-            }}
-            className="btn-secondary"
-            disabled={loadingResults}
-          >
-            {loadingResults
-              ? "Loading Results..."
-              : showResults
-              ? "Hide"
-              : "Show"} Candidate Results {!loadingResults && `(${candidateResults.length})`}
-          </button>
+          {assessment.assessment?.status !== "draft" && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowResults(!showResults);
+                if (showResults) {
+                  setSelectedCandidate(null);
+                  setAnswerLogs([]);
+                }
+              }}
+              className="btn-secondary"
+              disabled={loadingResults}
+            >
+              {loadingResults
+                ? "Loading Results..."
+                : showResults
+                ? "Hide"
+                : "Show"} Candidate Results {!loadingResults && `(${candidateResults.length})`}
+            </button>
+          )}
         </div>
 
         {/* Candidate Results Section */}

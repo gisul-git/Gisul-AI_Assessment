@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from difflib import SequenceMatcher
 from functools import lru_cache
 from typing import Any, Dict, List
 
@@ -645,43 +646,51 @@ async def evaluate_answer_with_ai(
     
     # Pre-check: If candidate answer is too similar to question text, return 0 immediately
     if candidate_answer_clean:
-        # Normalize both texts for comparison (lowercase, remove extra spaces)
+        # Normalize both texts for comparison (lowercase, remove extra spaces, punctuation)
         question_normalized = " ".join(question_text.lower().split())
         answer_normalized = " ".join(candidate_answer_clean.lower().split())
         
-        # Check if answer is identical or very similar to question (80%+ similarity)
+        # Check if answer is identical or very similar to question
         if question_normalized and answer_normalized:
-            # Simple similarity check: if answer contains most of question words in same order
+            # Use SequenceMatcher for accurate similarity calculation
+            similarity = SequenceMatcher(None, question_normalized, answer_normalized).ratio()
+            
+            # Check 1: Exact match or very high similarity (80%+)
+            if similarity >= 0.80:
+                return {
+                    "score": 0,
+                    "feedback": "Answer appears to be copied from the question text. No marks awarded.",
+                    "evaluation": "The candidate's answer is identical or very similar (80%+) to the question itself, indicating they copied the question without providing an actual answer. This demonstrates no understanding of the concept."
+                }
+            
+            # Check 2: If answer is shorter or similar length to question and has high similarity (60%+)
             question_words = question_normalized.split()
             answer_words = answer_normalized.split()
             
             if len(question_words) > 0:
-                # Check if answer starts with question text or is very similar
+                # If answer length is similar to question (not much longer), and similarity is 60%+
+                if similarity >= 0.60 and len(answer_words) <= len(question_words) * 1.3:
+                    return {
+                        "score": 0,
+                        "feedback": "Answer appears to be copied from the question text. No marks awarded.",
+                        "evaluation": "The candidate's answer is very similar (60%+) to the question itself and has similar length, indicating they copied the question without providing an actual answer. This demonstrates no understanding of the concept."
+                    }
+                
+                # Check 3: If answer starts with question text (even if longer)
                 if answer_normalized.startswith(question_normalized[:min(len(question_normalized), len(answer_normalized))]):
                     if len(answer_words) <= len(question_words) * 1.2:  # Answer is not much longer than question
                         return {
                             "score": 0,
                             "feedback": "Answer appears to be copied from the question text. No marks awarded.",
-                            "evaluation": "The candidate's answer is identical or very similar to the question itself, indicating they copied the question without providing an actual answer. This demonstrates no understanding of the concept."
+                            "evaluation": "The candidate's answer starts with the question text, indicating they copied the question without providing an actual answer. This demonstrates no understanding of the concept."
                         }
                 
-                # Check word overlap - if more than 70% of question words are in answer in same order
-                matching_words = 0
-                question_idx = 0
-                for word in answer_words:
-                    if question_idx < len(question_words) and word == question_words[question_idx]:
-                        matching_words += 1
-                        question_idx += 1
-                    elif question_idx < len(question_words) and word in question_words[question_idx:question_idx+3]:
-                        # Allow some flexibility
-                        matching_words += 0.5
-                
-                similarity_ratio = matching_words / len(question_words) if question_words else 0
-                if similarity_ratio > 0.7 and len(answer_words) <= len(question_words) * 1.3:
+                # Check 4: If answer contains question text as substring (exact match within answer)
+                if question_normalized in answer_normalized and len(answer_words) <= len(question_words) * 1.5:
                     return {
                         "score": 0,
                         "feedback": "Answer appears to be copied from the question text. No marks awarded.",
-                        "evaluation": "The candidate's answer is very similar to the question itself, indicating they copied the question without providing an actual answer. This demonstrates no understanding of the concept."
+                        "evaluation": "The candidate's answer contains the question text, indicating they copied the question without providing an actual answer. This demonstrates no understanding of the concept."
                     }
     
     prompt = f"""

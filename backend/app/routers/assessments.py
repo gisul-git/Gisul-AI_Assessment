@@ -1142,7 +1142,8 @@ async def get_answer_logs(
         if not answer_logs or not isinstance(answer_logs, dict):
             logger.info(f"No answerLogs found in assessment or answerLogs is not a dict. Type: {type(answer_logs)}")
             logger.info(f"Assessment ID: {assessment_id}, Full assessment keys: {list(assessment.keys())}")
-            return success_response("Answer logs fetched successfully", [])
+            # Don't return early - continue to process questions from candidateResponses (especially MCQs)
+            answer_logs = {}
         
         logger.info(f"Answer logs keys in database: {list(answer_logs.keys())}")
         logger.info(f"Looking for candidate key: '{candidate_key}'")
@@ -1154,10 +1155,12 @@ async def get_answer_logs(
         if not candidate_logs or not isinstance(candidate_logs, dict):
             logger.warning(f"No logs found for candidate key '{candidate_key}'. Available keys: {list(answer_logs.keys())}")
             # Try to find a key that's close (for debugging)
-            for key in answer_logs.keys():
-                if candidate_key.lower() in key.lower() or key.lower() in candidate_key.lower():
-                    logger.info(f"Found similar key: '{key}' (searching for '{candidate_key}')")
-            return success_response("Answer logs fetched successfully", [])
+            if answer_logs:
+                for key in answer_logs.keys():
+                    if candidate_key.lower() in key.lower() or key.lower() in candidate_key.lower():
+                        logger.info(f"Found similar key: '{key}' (searching for '{candidate_key}')")
+            # Don't return early - continue to process questions from candidateResponses (especially MCQs)
+            candidate_logs = {}
         
         logger.info(f"Found candidate logs with question keys: {list(candidate_logs.keys())}")
 
@@ -1257,6 +1260,7 @@ async def get_answer_logs(
                 continue
 
         # Add questions that don't have logs but have submitted answers (especially MCQ)
+        # Also include ALL MCQ questions even if they have no logs or submitted answers
         # Get submission time from candidate response
         submission_time = None
         if isinstance(candidate_responses, dict):
@@ -1272,13 +1276,21 @@ async def get_answer_logs(
             if idx not in questions_with_logs and isinstance(question, dict):
                 # Check if there's a submitted answer for this question
                 submitted_answer = submitted_answers.get(idx)
-                if submitted_answer is not None:
-                    # Create a log entry from submitted answer
+                
+                # For MCQ questions, ALWAYS include them (even if no logs and no submitted answer)
+                # For other question types, only include if there's a submitted answer
+                is_mcq = question.get("type") == "MCQ"
+                should_include = submitted_answer is not None or is_mcq
+                
+                if should_include:
+                    # Create a log entry from submitted answer (or empty for MCQ without answer)
                     serialized_logs = []
-                    if submitted_answer:
+                    answer_to_use = str(submitted_answer) if submitted_answer is not None else ""
+                    # Always create a log entry for MCQs, even if answer is empty
+                    if answer_to_use or is_mcq:
                         # Create a single log entry for the submitted answer
                         serialized_logs.append({
-                            "answer": str(submitted_answer),
+                            "answer": answer_to_use,
                             "questionType": str(question.get("type", "")),
                             "timestamp": submission_time,
                             "version": 1,
@@ -1294,10 +1306,12 @@ async def get_answer_logs(
                     
                     # For MCQ questions, check if answer is correct
                     is_mcq_correct = None
-                    if question.get("type") == "MCQ":
+                    if is_mcq:
                         correct_answer = question.get("correctAnswer", "")
-                        if submitted_answer:
-                            is_mcq_correct = (str(submitted_answer).strip() == correct_answer) if correct_answer else None
+                        if answer_to_use:
+                            is_mcq_correct = (answer_to_use.strip() == correct_answer) if correct_answer else None
+                        else:
+                            is_mcq_correct = False  # No answer provided = incorrect
                     
                     formatted_logs.append({
                         "questionIndex": idx,
@@ -1308,8 +1322,8 @@ async def get_answer_logs(
                         "aiFeedback": ai_feedback,
                         "maxScore": question.get("score", 5),
                         "isMcqCorrect": is_mcq_correct,
-                        "correctAnswer": question.get("correctAnswer") if question.get("type") == "MCQ" else None,
-                        "options": question.get("options", []) if question.get("type") == "MCQ" else None,
+                        "correctAnswer": question.get("correctAnswer") if is_mcq else None,
+                        "options": question.get("options", []) if is_mcq else None,
                     })
 
         # Sort by question index

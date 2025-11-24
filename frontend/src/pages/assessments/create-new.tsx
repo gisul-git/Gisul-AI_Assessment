@@ -1946,11 +1946,12 @@ export default function CreateNewAssessmentPage() {
                     }
                     setError(null);
                     // Save and redirect to dashboard
+                    // Don't regenerate URL if it already exists to preserve the copied URL
+                    // Since we already checked assessmentUrl exists above, just redirect
                     try {
-                      await handleGenerateUrl();
                       router.push("/dashboard");
                     } catch (err: any) {
-                      setError("Failed to save. Please try again.");
+                      setError("Failed to redirect. Please try again.");
                     }
                   }}
                   className="btn-primary"
