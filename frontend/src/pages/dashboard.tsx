@@ -131,15 +131,15 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
   const getStatusColor = (status: string) => {
     switch (status) {
       case "ready":
-        return { bg: "#dcfce7", text: "#166534", border: "#10b981" };
+        return { bg: "#dcfce7", text: "#166534", border: "#10b981" }; // Keep success green
       case "draft":
-        return { bg: "rgba(105, 83, 163, 0.1)", text: "#6953a3", border: "#6953a3" };
+        return { bg: "rgba(201, 244, 212, 0.2)", text: "#1E5A3B", border: "#C9F4D4" }; // Mint Cream theme
       case "scheduled":
-        return { bg: "rgba(105, 83, 163, 0.1)", text: "#6953a3", border: "#6953a3" };
+        return { bg: "rgba(201, 244, 212, 0.2)", text: "#1E5A3B", border: "#C9F4D4" }; // Mint Cream theme
       case "active":
-        return { bg: "#dbeafe", text: "#1e40af", border: "#3b82f6" };
+        return { bg: "#dbeafe", text: "#1e40af", border: "#3b82f6" }; // Keep info blue
       default:
-        return { bg: "#f1f5f9", text: "#475569", border: "#94a3b8" };
+        return { bg: "rgba(232, 250, 240, 0.5)", text: "#2D7A52", border: "#A8E8BC" }; // Mint 50/400
     }
   };
 
@@ -157,7 +157,7 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
   };
 
   return (
-    <div style={{ backgroundColor: "#f1dcba", minHeight: "100vh" }}>
+    <div style={{ backgroundColor: "#ffffff", minHeight: "100vh" }}>
       <header className="enterprise-header">
         <div className="enterprise-header-content">
           <div style={{ display: "flex", alignItems: "center", gap: "1rem", flex: 1, minWidth: 0, marginLeft: "-5rem" }}>
@@ -207,9 +207,9 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
               <h1 style={{ margin: 0, marginBottom: "0.5rem", fontSize: "clamp(1.5rem, 4vw, 2rem)", color: "#1a1625", fontWeight: 700 }}>
                 Assessments Dashboard
               </h1>
-              <p style={{ color: "#6b6678", margin: 0, fontSize: "0.875rem" }}>
+              <p style={{ color: "#2D7A52", margin: 0, fontSize: "0.875rem" }}>
                 Signed in as <strong>{activeSession?.user?.email}</strong> • Role:{" "}
-                <span className="badge badge-purple" style={{ marginLeft: "0.25rem" }}>
+                <span className="badge badge-mint" style={{ marginLeft: "0.25rem" }}>
                   {role}
                 </span>
               </p>
@@ -226,7 +226,7 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
           <div className="card">
             <div style={{ textAlign: "center", padding: "3rem" }}>
               <div className="spinner" style={{ fontSize: "2rem", marginBottom: "1rem" }}>⟳</div>
-              <p style={{ color: "#6b6678" }}>Loading assessments...</p>
+              <p style={{ color: "#2D7A52" }}>Loading assessments...</p>
             </div>
           </div>
         ) : error ? (
@@ -244,7 +244,7 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                   width: "80px",
                   height: "80px",
                   margin: "0 auto 1.5rem",
-                  backgroundColor: "#f1dcba",
+                  backgroundColor: "#E8FAF0", // Mint 50
                   borderRadius: "50%",
                   display: "flex",
                   alignItems: "center",
@@ -257,7 +257,7 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
               <h2 style={{ color: "#1a1625", marginBottom: "1rem", fontSize: "1.5rem" }}>
                 No assessments yet
               </h2>
-              <p style={{ color: "#6b6678", marginBottom: "2rem", maxWidth: "500px", margin: "0 auto 2rem" }}>
+              <p style={{ color: "#2D7A52", marginBottom: "2rem", maxWidth: "500px", margin: "0 auto 2rem" }}>
                 Create your first assessment to get started with AI-powered topic and question
                 generation.
               </p>
@@ -275,7 +275,7 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                 Your Assessments
               </h2>
               <span
-                className="badge badge-purple"
+                className="badge badge-mint"
                 style={{ fontSize: "0.875rem", padding: "0.5rem 1rem" }}
               >
                 {assessments.length} Total
@@ -295,7 +295,7 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                     key={assessment.id}
                     className="card-hover"
                     style={{
-                      border: "1px solid #e8e0d0",
+                      border: "1px solid #A8E8BC", // Mint 400
                       borderRadius: "0.75rem",
                       padding: "1.5rem",
                       backgroundColor: "#ffffff",
@@ -335,7 +335,7 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                         {assessment.status}
                       </span>
                     </div>
-                    <div style={{ color: "#6b6678", fontSize: "0.875rem", marginBottom: "0.75rem" }}>
+                    <div style={{ color: "#2D7A52", fontSize: "0.875rem", marginBottom: "0.75rem" }}>
                       <div style={{ marginBottom: "0.25rem" }}>
                         <strong>Created:</strong> {formatDate(assessment.createdAt)}
                       </div>
@@ -349,7 +349,7 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                         </div>
                       )}
                     </div>
-                    <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem", paddingTop: "1rem", borderTop: "1px solid #f1dcba" }}>
+                    <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem", paddingTop: "1rem", borderTop: "1px solid #E8FAF0" }}>
                       <button
                         type="button"
                         className="btn-secondary"

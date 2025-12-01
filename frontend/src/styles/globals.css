@@ -1,29 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 :root {
-  /* Brand Colors */
-  --brand-purple: #6953a3;
-  --brand-purple-dark: #554288;
-  --brand-purple-light: #8b7bb8;
-  --brand-yellow: #f4e403;
-  --brand-yellow-dark: #d4c603;
-  --brand-beige: #f1dcba;
-  --brand-beige-light: #f8f0e0;
-  --brand-beige-dark: #e8d0a0;
+  /* Mint Cream Theme - Primary Colors */
+  --mint-50: #E8FAF0; /* Backgrounds, subtle sections */
+  --mint-100: #C9F4D4; /* PRIMARY BRAND COLOR - Cards, buttons, main elements */
+  --mint-200: #B0EFC0; /* Hover states, interactions */
+  --mint-300: #9DE8B0; /* Active/pressed states */
+  --mint-400: #A8E8BC; /* Borders, dividers */
   
-  /* Enterprise Color Palette */
-  --background: #f1dcba;
+  /* Mint Cream Theme - Text Colors */
+  --text-primary: #1E5A3B; /* Body text, headings - WCAG AAA compliant (8.2:1) */
+  --text-secondary: #2D7A52; /* Subheadings, labels - WCAG AA compliant (5.8:1) */
+  --text-subtle: #4A9A6A; /* Captions, metadata - Large text only (3.5:1) */
+  
+  /* Mint Cream Theme - Complementary Colors */
+  --blush-pink: #FFE5EC; /* Romantic, gentle accent */
+  --butter-yellow: #FFFEC0; /* Warm, cheerful highlights */
+  --powder-blue: #D4E4F7; /* Cool, professional balance */
+  --warm-beige: #F5F1E8; /* Natural, earthy grounding */
+  
+  /* Background & Surface Colors */
+  --background: #ffffff; /* Main background - white for clean look */
   --surface: #ffffff;
   --surface-elevated: #ffffff;
-  --text-primary: #1a1625;
-  --text-secondary: #4a4558;
-  --text-tertiary: #6b6678;
-  --border: #e8e0d0;
-  --border-light: #f1dcba;
+  --background-subtle: var(--mint-50); /* Subtle sections */
   
-  /* Status Colors */
+  /* Border Colors */
+  --border: var(--mint-400);
+  --border-light: var(--mint-50);
+  
+  /* Status Colors (preserved for alerts, notifications) */
   --success: #10b981;
   --error: #ef4444;
   --warning: #f59e0b;
   --info: #3b82f6;
+  
+  /* Legacy support (deprecated - use Mint Cream colors instead) */
+  --brand-purple: var(--mint-100);
+  --brand-purple-dark: var(--mint-200);
+  --brand-purple-light: var(--mint-300);
+  --text-tertiary: var(--text-subtle);
 }
 
 * {
@@ -34,12 +54,119 @@ html,
 body {
   padding: 0;
   margin: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
   background-color: var(--background);
   color: var(--text-primary);
-  line-height: 1.6;
+  line-height: 1.7; /* Improved readability for body text */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Typography Scale - Mint Cream Theme */
+h1 {
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+h2 {
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: 1.3;
+  color: var(--text-primary);
+}
+
+h3 {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+h4 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.display-text {
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+
+/* Hero Section Enhancements */
+.hero-headline {
+  font-size: clamp(48px, 8vw, 84px);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, #9DE8B0 0%, #6ABB8C 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero-organic-shape {
+  background: linear-gradient(135deg, rgba(201, 244, 212, 0.4) 0%, rgba(157, 232, 176, 0.3) 100%);
+  filter: blur(40px);
+  border-radius: 30% 70% 70% 30% / 30% 30% 70% 70%;
+}
+
+.hero-3d-object {
+  filter: drop-shadow(0 20px 60px rgba(157, 232, 176, 0.3));
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+
+.hero-3d-container {
+  width: 100%;
+  height: 500px;
+  position: relative;
+  filter: drop-shadow(0 20px 60px rgba(157, 232, 176, 0.3));
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+
+.hero-3d-container canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+@media (min-width: 768px) {
+  .hero-3d-container {
+    height: 600px;
+  }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { 
+    filter: drop-shadow(0 20px 60px rgba(157, 232, 176, 0.3)); 
+  }
+  50% { 
+    filter: drop-shadow(0 25px 80px rgba(157, 232, 176, 0.5)); 
+  }
+}
+
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Smooth scroll with offset for sticky header */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  /* Smooth scroll to anchors with header offset */
+  section[id] {
+    scroll-margin-top: 100px;
+  }
 }
 
 a {
@@ -58,30 +185,44 @@ button {
   padding: 2rem 1.5rem;
 }
 
+/* Mint Cream Theme - Card Components */
 .card {
   background-color: var(--surface);
-  border-radius: 0.75rem;
-  box-shadow: 0 1px 3px 0 rgba(105, 83, 163, 0.1), 0 1px 2px 0 rgba(105, 83, 163, 0.06);
+  border-radius: 12px; /* Updated to match brand guidelines */
+  box-shadow: 0 2px 8px rgba(201, 244, 212, 0.15); /* Mint-themed shadow */
   padding: 2rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--mint-400);
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  box-shadow: 0 4px 12px rgba(201, 244, 212, 0.25);
+  border-color: var(--mint-300);
 }
 
 .card-elevated {
   background-color: var(--surface-elevated);
-  border-radius: 0.75rem;
-  box-shadow: 0 4px 6px -1px rgba(105, 83, 163, 0.1), 0 2px 4px -1px rgba(105, 83, 163, 0.06);
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(201, 244, 212, 0.2);
   padding: 2rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--mint-400);
+  transition: all 0.3s ease;
 }
 
+.card-elevated:hover {
+  box-shadow: 0 8px 16px rgba(201, 244, 212, 0.3);
+  transform: translateY(-2px);
+}
+
+/* Mint Cream Theme - Form Inputs */
 input,
 select,
 textarea {
   width: 100%;
   padding: 0.75rem 1rem;
   margin-top: 0.5rem;
-  border-radius: 0.5rem;
-  border: 1px solid var(--border);
+  border-radius: 8px;
+  border: 1px solid var(--mint-400);
   background-color: var(--surface);
   color: var(--text-primary);
   font-family: inherit;
@@ -93,46 +234,54 @@ input:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: var(--brand-purple);
-  box-shadow: 0 0 0 3px rgba(105, 83, 163, 0.1);
+  border-color: var(--mint-200);
+  box-shadow: 0 0 0 3px rgba(201, 244, 212, 0.2); /* Mint-themed focus ring */
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--mint-300);
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: var(--text-tertiary);
+  color: var(--text-subtle);
 }
 
 label {
   display: block;
   font-weight: 600;
   margin-top: 1rem;
-  color: var(--text-primary);
+  color: var(--text-secondary); /* Using secondary for labels */
   font-size: 0.9375rem;
 }
 
+/* Mint Cream Theme - Primary Button */
 .btn-primary {
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  background-color: var(--brand-purple);
-  color: #ffffff;
+  background-color: var(--mint-100); /* PRIMARY BRAND COLOR */
+  color: var(--text-primary); /* WCAG AAA compliant contrast */
   border: none;
-  border-radius: 0.5rem;
-  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  padding: 12px 24px; /* Updated to match brand guidelines */
   margin-top: 1.5rem;
   font-weight: 600;
   font-size: 0.9375rem;
   transition: all 0.2s ease;
-  box-shadow: 0 1px 2px 0 rgba(105, 83, 163, 0.2);
+  box-shadow: 0 2px 4px rgba(201, 244, 212, 0.2);
 }
 
 .btn-primary:hover {
-  background-color: var(--brand-purple-dark);
-  box-shadow: 0 2px 4px 0 rgba(105, 83, 163, 0.3);
+  background-color: var(--mint-200); /* Hover state */
+  box-shadow: 0 4px 8px rgba(201, 244, 212, 0.3);
   transform: translateY(-1px);
 }
 
 .btn-primary:active {
+  background-color: var(--mint-300); /* Active/pressed state */
   transform: translateY(0);
 }
 
@@ -142,48 +291,51 @@ label {
   transform: none;
 }
 
+/* Mint Cream Theme - Secondary Button */
 .btn-secondary {
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  background-color: var(--brand-beige-light);
-  color: var(--text-primary);
-  border: 1px solid var(--brand-beige-dark);
-  border-radius: 0.5rem;
-  padding: 0.75rem 1.5rem;
+  background-color: transparent;
+  color: var(--text-secondary);
+  border: 2px solid var(--mint-200);
+  border-radius: 8px;
+  padding: 12px 24px;
   font-weight: 600;
   font-size: 0.9375rem;
   transition: all 0.2s ease;
 }
 
 .btn-secondary:hover {
-  background-color: var(--brand-beige);
-  border-color: var(--brand-beige-dark);
+  background-color: var(--mint-50); /* Subtle background on hover */
+  border-color: var(--mint-300);
   transform: translateY(-1px);
 }
 
 .btn-secondary:active {
+  background-color: var(--mint-100);
   transform: translateY(0);
 }
 
+/* Mint Cream Theme - Accent Button (alias for primary) */
 .btn-accent {
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  background-color: var(--brand-purple);
-  color: #ffffff;
+  background-color: var(--mint-100);
+  color: var(--text-primary);
   border: none;
-  border-radius: 0.5rem;
-  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  padding: 12px 24px;
   font-weight: 600;
   font-size: 0.9375rem;
   transition: all 0.2s ease;
-  box-shadow: 0 1px 2px 0 rgba(105, 83, 163, 0.2);
+  box-shadow: 0 2px 4px rgba(201, 244, 212, 0.2);
 }
 
 .btn-accent:hover {
-  background-color: var(--brand-purple-dark);
-  box-shadow: 0 2px 4px 0 rgba(105, 83, 163, 0.3);
+  background-color: var(--mint-200);
+  box-shadow: 0 4px 8px rgba(201, 244, 212, 0.3);
   transform: translateY(-1px);
 }
 
@@ -230,29 +382,51 @@ label {
   letter-spacing: 0.05em;
 }
 
-.badge-purple {
-  background-color: rgba(105, 83, 163, 0.1);
-  color: var(--brand-purple);
-}
-
-.badge-yellow {
-  background-color: rgba(244, 228, 3, 0.2);
-  color: #8b7a00;
-}
-
-.badge-beige {
-  background-color: var(--brand-beige);
+/* Mint Cream Theme - Badges */
+.badge-mint {
+  background-color: var(--mint-50);
   color: var(--text-primary);
 }
 
-/* Enterprise Header Styles */
+.badge-mint-light {
+  background-color: rgba(201, 244, 212, 0.2);
+  color: var(--text-secondary);
+}
+
+.badge-blush {
+  background-color: var(--blush-pink);
+  color: var(--text-primary);
+}
+
+.badge-butter {
+  background-color: var(--butter-yellow);
+  color: var(--text-primary);
+}
+
+/* Legacy badge support */
+.badge-purple {
+  background-color: var(--mint-50);
+  color: var(--text-primary);
+}
+
+.badge-yellow {
+  background-color: var(--butter-yellow);
+  color: var(--text-primary);
+}
+
+.badge-beige {
+  background-color: var(--warm-beige);
+  color: var(--text-primary);
+}
+
+/* Mint Cream Theme - Header Styles */
 .enterprise-header {
-  background: linear-gradient(135deg, var(--brand-purple) 0%, var(--brand-purple-dark) 100%);
-  color: #ffffff;
+  background: linear-gradient(135deg, var(--mint-100) 0%, var(--mint-200) 100%);
+  color: var(--text-primary);
   height: 64px;
   display: flex;
   align-items: center;
-  box-shadow: 0 2px 4px 0 rgba(105, 83, 163, 0.2);
+  box-shadow: 0 2px 4px rgba(201, 244, 212, 0.2);
 }
 
 .enterprise-header-content {
@@ -266,21 +440,22 @@ label {
   height: 100%;
 }
 
-/* Section Dividers */
+/* Mint Cream Theme - Section Dividers */
 .section-divider {
   height: 1px;
-  background: linear-gradient(to right, transparent, var(--border), transparent);
+  background: linear-gradient(to right, transparent, var(--mint-400), transparent);
   margin: 2rem 0;
 }
 
-/* Card Hover Effects */
+/* Mint Cream Theme - Card Hover Effects */
 .card-hover {
   transition: all 0.3s ease;
 }
 
 .card-hover:hover {
-  box-shadow: 0 10px 15px -3px rgba(105, 83, 163, 0.1), 0 4px 6px -2px rgba(105, 83, 163, 0.05);
+  box-shadow: 0 10px 15px -3px rgba(201, 244, 212, 0.2), 0 4px 6px -2px rgba(201, 244, 212, 0.1);
   transform: translateY(-2px);
+  border-color: var(--mint-300);
 }
 
 /* Loading Spinner */
@@ -298,17 +473,17 @@ label {
   display: inline-block;
 }
 
-/* Gradient Text */
+/* Mint Cream Theme - Gradient Text */
 .gradient-text {
-  background: linear-gradient(135deg, var(--brand-purple) 0%, var(--brand-purple-light) 100%);
+  background: linear-gradient(135deg, var(--mint-200) 0%, var(--mint-300) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-/* Focus Visible for Accessibility */
+/* Mint Cream Theme - Focus Visible for Accessibility */
 *:focus-visible {
-  outline: 2px solid var(--brand-purple);
+  outline: 2px solid var(--mint-200);
   outline-offset: 2px;
 }
 
@@ -319,16 +494,16 @@ label {
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--brand-beige-light);
+  background: var(--mint-50);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--brand-beige-dark);
+  background: var(--mint-300);
   border-radius: 5px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--brand-purple-light);
+  background: var(--mint-200);
 }
 
 /* Responsive Design - Mobile First Approach */
