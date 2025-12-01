@@ -34,8 +34,8 @@ export default function CandidateEntryPage() {
         // Store candidate info in sessionStorage
         sessionStorage.setItem("candidateEmail", email.trim());
         sessionStorage.setItem("candidateName", name.trim());
-        // Redirect to instructions page first
-        router.push(`/assessment/${id}/${token}/instructions`);
+        // Redirect to pre-check page first for system validation
+        router.push(`/precheck/${id}/${token}`);
       } else {
         setError(response.data?.message || "Invalid credentials");
       }

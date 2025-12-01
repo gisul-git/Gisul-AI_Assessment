@@ -10,7 +10,8 @@ import {
 import { useRouter } from "next/router";
 import axios from "axios";
 import { useProctor, type ProctorViolation } from "@/hooks/useProctor";
-import { ProctorToast, FullscreenWarningBanner, ProctorDebugPanel } from "@/components/proctor";
+import { useCameraProctor, type CameraProctorViolation } from "@/hooks/useCameraProctor";
+import { ProctorToast, FullscreenWarningBanner, ProctorDebugPanel, ProctorStatusWidget } from "@/components/proctor";
 
 interface Question {
   questionText: string;
@@ -63,12 +64,17 @@ export default function CandidateAssessmentPage() {
   const [latestViolation, setLatestViolation] = useState<ProctorViolation | null>(null);
   const [showFullscreenWarning, setShowFullscreenWarning] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
+  const [cameraProctorEnabled, setCameraProctorEnabled] = useState(false);
 
-  // Check debug mode from URL params
+  // Check debug mode from URL params and camera proctor state
   useEffect(() => {
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search);
-      setDebugMode(urlParams.get("proctorDebug") === "true");
+      setDebugMode(urlParams.get("proctorDebug") === "true" || urlParams.get("cameraDebug") === "true");
+      
+      // Check if camera proctoring was enabled in instructions
+      const cameraEnabled = sessionStorage.getItem("cameraProctorEnabled") === "true";
+      setCameraProctorEnabled(cameraEnabled);
     }
   }, []);
 
@@ -103,6 +109,49 @@ export default function CandidateAssessmentPage() {
     enableDevToolsDetection: debugMode,
     debugMode,
   });
+
+  // Camera-based proctoring hook
+  const {
+    isCameraOn,
+    isModelLoaded,
+    facesCount,
+    lastViolation: lastCameraViolation,
+    errors: cameraErrors,
+    gazeDirection,
+    isBlinking,
+    startCamera,
+    stopCamera,
+    videoRef,
+    canvasRef,
+    debugInfo,
+  } = useCameraProctor({
+    userId: candidateEmail || "",
+    assessmentId: (id as string) || "",
+    onViolation: (violation) => {
+      setTabSwitchCount((prev) => prev + 1);
+      // Convert camera violation to proctor violation for unified display
+      setLatestViolation({
+        eventType: violation.eventType as any,
+        timestamp: violation.timestamp,
+        assessmentId: violation.assessmentId,
+        userId: violation.userId,
+        metadata: violation.metadata,
+      });
+    },
+    enabled: cameraProctorEnabled,
+    debugMode,
+  });
+
+  // Start camera when component mounts if camera proctoring is enabled
+  useEffect(() => {
+    if (cameraProctorEnabled && candidateEmail && id) {
+      startCamera();
+    }
+    
+    return () => {
+      stopCamera();
+    };
+  }, [cameraProctorEnabled, candidateEmail, id]);
 
   // Handle fullscreen request from warning banner
   const handleEnterFullscreenFromBanner = async () => {
@@ -1321,6 +1370,47 @@ export default function CandidateAssessmentPage() {
         duration={4000}
         onDismiss={() => setLatestViolation(null)}
       />
+      
+      {/* Camera Proctor Status Widget */}
+      {cameraProctorEnabled && (
+        <ProctorStatusWidget
+          isCameraOn={isCameraOn}
+          isModelLoaded={isModelLoaded}
+          facesCount={facesCount}
+          gazeDirection={gazeDirection}
+          lastViolation={lastCameraViolation}
+          errors={cameraErrors}
+          debugMode={debugMode}
+          debugInfo={debugInfo}
+          videoRef={videoRef}
+          canvasRef={canvasRef}
+        />
+      )}
+      
+      {/* Hidden video and canvas elements for camera proctoring */}
+      {cameraProctorEnabled && (
+        <>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            style={{
+              position: "absolute",
+              top: "-9999px",
+              left: "-9999px",
+              width: "640px",
+              height: "360px",
+              opacity: 0,
+              pointerEvents: "none",
+            }}
+          />
+          <canvas
+            ref={canvasRef}
+            style={{ display: "none" }}
+          />
+        </>
+      )}
       
       {/* Debug Panel - only shown when proctorDebug=true in URL */}
       <ProctorDebugPanel

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/router";
-import { FullscreenPrompt } from "@/components/proctor";
+import { FullscreenPrompt, CameraProctorModal } from "@/components/proctor";
+import { useCameraProctor } from "@/hooks/useCameraProctor";
 
 export default function AssessmentInstructionsPage() {
   const router = useRouter();
@@ -10,8 +11,21 @@ export default function AssessmentInstructionsPage() {
   const [name, setName] = useState<string | null>(null);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [showFullscreenPrompt, setShowFullscreenPrompt] = useState(false);
+  const [showCameraPrompt, setShowCameraPrompt] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [fullscreenError, setFullscreenError] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+
+  // Camera proctoring hook
+  const {
+    startCamera,
+    stopCamera,
+    errors: cameraErrors,
+  } = useCameraProctor({
+    userId: email || "",
+    assessmentId: (id as string) || "",
+    enabled: true,
+  });
 
   useEffect(() => {
     const storedEmail = sessionStorage.getItem("candidateEmail");
@@ -136,6 +150,28 @@ export default function AssessmentInstructionsPage() {
       // Record fullscreen enabled event
       await recordProctorEvent("FULLSCREEN_ENABLED", { source: "mandatory_prompt" });
       
+      // Store fullscreen state
+      sessionStorage.setItem("fullscreenAccepted", "true");
+      
+      // Close fullscreen prompt and show camera prompt
+      setShowFullscreenPrompt(false);
+      setShowCameraPrompt(true);
+      setIsStarting(false);
+    } else {
+      // Fullscreen failed
+      setFullscreenError(true);
+      setIsStarting(false);
+    }
+  };
+
+  // Handle camera consent accepted
+  const handleCameraAccept = async (): Promise<boolean> => {
+    setIsStarting(true);
+    setCameraError(null);
+    
+    const cameraStarted = await startCamera();
+    
+    if (cameraStarted) {
       // Start candidate session (record startedAt in backend)
       const sessionStarted = await startSession();
       
@@ -143,17 +179,39 @@ export default function AssessmentInstructionsPage() {
         console.warn("[Session] Failed to record session start, but continuing...");
       }
       
-      // Store fullscreen state
-      sessionStorage.setItem("fullscreenAccepted", "true");
+      // Store camera consent in session
+      sessionStorage.setItem("cameraProctorEnabled", "true");
       
-      // Close prompt and navigate
-      setShowFullscreenPrompt(false);
+      // Navigate to assessment
+      setShowCameraPrompt(false);
       router.push(`/assessment/${id}/${token}/take`);
+      return true;
     } else {
-      // Fullscreen failed
-      setFullscreenError(true);
+      setCameraError(cameraErrors[cameraErrors.length - 1] || "Failed to start camera");
       setIsStarting(false);
+      return false;
     }
+  };
+
+  // Handle camera consent denied
+  const handleCameraDeny = async () => {
+    // Record camera denied event
+    await recordProctorEvent("CAMERA_DENIED", { source: "consent_modal" });
+    
+    // Store that camera was denied
+    sessionStorage.setItem("cameraProctorEnabled", "false");
+    
+    // Still allow exam to proceed (per policy - could be changed to block)
+    // Start candidate session
+    const sessionStarted = await startSession();
+    
+    if (!sessionStarted) {
+      console.warn("[Session] Failed to record session start, but continuing...");
+    }
+    
+    // Navigate to assessment (camera proctoring will be disabled)
+    setShowCameraPrompt(false);
+    router.push(`/assessment/${id}/${token}/take`);
   };
 
   // Handle fullscreen failure from prompt
@@ -229,6 +287,9 @@ export default function AssessmentInstructionsPage() {
                   <strong>Fullscreen Mode (Required):</strong> You must enter fullscreen mode to start the exam. The assessment will not begin without it.
                 </li>
                 <li style={{ marginBottom: "0.5rem" }}>
+                  <strong>Camera Proctoring:</strong> Your camera will be used to monitor face presence, gaze direction, and multiple faces. Snapshots are captured only on violations.
+                </li>
+                <li style={{ marginBottom: "0.5rem" }}>
                   <strong>Tab Switching:</strong> Switching to other browser tabs will be detected and recorded.
                 </li>
                 <li style={{ marginBottom: "0.5rem" }}>
@@ -288,6 +349,16 @@ export default function AssessmentInstructionsPage() {
         onFullscreenFailed={handleFullscreenFailed}
         candidateName={name || undefined}
         isLoading={isStarting}
+      />
+
+      {/* Camera Proctoring Consent Modal */}
+      <CameraProctorModal
+        isOpen={showCameraPrompt}
+        onAccept={handleCameraAccept}
+        onDeny={handleCameraDeny}
+        candidateName={name || undefined}
+        isLoading={isStarting}
+        cameraError={cameraError}
       />
     </div>
   );
