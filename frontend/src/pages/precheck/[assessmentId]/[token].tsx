@@ -10,6 +10,9 @@ interface AssessmentInfo {
   endTime: string;
 }
 
+// Sequential check order (removed fullscreen and tabSwitch)
+const CHECK_ORDER: CheckType[] = ["browser", "network", "camera", "microphone"];
+
 export default function PrecheckPage() {
   const router = useRouter();
   const { assessmentId, token } = router.query;
@@ -21,7 +24,8 @@ export default function PrecheckPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState(false);
-  const [retryingCheck, setRetryingCheck] = useState<CheckType | null>(null);
+  const [currentCheckIndex, setCurrentCheckIndex] = useState(0);
+  const [isCheckingSequence, setIsCheckingSequence] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   
   // Policy settings (could come from API)
@@ -46,7 +50,6 @@ export default function PrecheckPage() {
     setSelectedMicrophone,
     networkMetrics,
     browserInfo,
-    runAllChecks,
     runCheck,
     cameraStream,
     audioLevel,
@@ -117,13 +120,6 @@ export default function PrecheckPage() {
     }
   }, [assessmentId, token, router]);
   
-  // Run checks when page loads
-  useEffect(() => {
-    if (!isLoading && email && assessmentId) {
-      runAllChecks();
-    }
-  }, [isLoading, email, assessmentId]);
-  
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -131,41 +127,38 @@ export default function PrecheckPage() {
     };
   }, [stopAllStreams]);
   
-  // Handle individual check retry
-  const handleRetry = useCallback(async (type: CheckType) => {
-    setRetryingCheck(type);
-    await runCheck(type);
-    setRetryingCheck(null);
-  }, [runCheck]);
+  // Get current check type
+  const currentCheckType = CHECK_ORDER[currentCheckIndex] || null;
   
-  // Handle fullscreen test
-  const handleFullscreenTest = useCallback(async () => {
-    try {
-      const elem = document.documentElement;
-      
-      if (elem.requestFullscreen) {
-        await elem.requestFullscreen();
-      } else if ((elem as any).webkitRequestFullscreen) {
-        await (elem as any).webkitRequestFullscreen();
-      } else if ((elem as any).mozRequestFullScreen) {
-        await (elem as any).mozRequestFullScreen();
-      }
-      
-      // Wait a moment then exit
-      setTimeout(async () => {
-        if (document.exitFullscreen) {
-          await document.exitFullscreen();
-        } else if ((document as any).webkitExitFullscreen) {
-          await (document as any).webkitExitFullscreen();
-        }
-        
-        // Mark as passed
-        await handleRetry("fullscreen");
-      }, 1500);
-    } catch (error) {
-      console.error("Fullscreen test error:", error);
+  // Check if all checks in our order are passed
+  const allSequentialChecksPassed = CHECK_ORDER.every(
+    (type) => checks[type]?.status === "passed"
+  );
+  
+  // Handle running the current check
+  const handleRunCurrentCheck = useCallback(async () => {
+    if (!currentCheckType || isCheckingSequence) return;
+    
+    setIsCheckingSequence(true);
+    await runCheck(currentCheckType);
+    setIsCheckingSequence(false);
+  }, [currentCheckType, isCheckingSequence, runCheck]);
+  
+  // Handle moving to next check
+  const handleNextCheck = useCallback(() => {
+    if (currentCheckIndex < CHECK_ORDER.length - 1) {
+      setCurrentCheckIndex(currentCheckIndex + 1);
     }
-  }, [handleRetry]);
+  }, [currentCheckIndex]);
+  
+  // Handle retry current check
+  const handleRetryCurrentCheck = useCallback(async () => {
+    if (!currentCheckType || isCheckingSequence) return;
+    
+    setIsCheckingSequence(true);
+    await runCheck(currentCheckType);
+    setIsCheckingSequence(false);
+  }, [currentCheckType, isCheckingSequence, runCheck]);
   
   // Handle proceed to exam
   const handleProceed = useCallback(() => {
@@ -173,29 +166,59 @@ export default function PrecheckPage() {
     router.push(`/assessment/${assessmentId}/${token}/instructions`);
   }, [assessmentId, token, router, stopAllStreams]);
   
-  // Handle proceed with risk (when camera denied but policy allows)
-  const handleProceedWithRisk = useCallback(async () => {
-    // Record camera denied event
-    try {
-      await fetch("/api/proctor/record", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          eventType: "CAMERA_DENIED",
-          timestamp: new Date().toISOString(),
-          assessmentId,
-          userId: email,
-          metadata: { source: "precheck_proceed_with_risk" },
-        }),
-      });
-    } catch (err) {
-      console.error("Error recording camera denied:", err);
+  // Helper to get check label
+  const getCheckLabel = (type: CheckType): string => {
+    switch (type) {
+      case "browser": return "Browser Compatibility";
+      case "network": return "Network Connection";
+      case "camera": return "Camera Access";
+      case "microphone": return "Microphone Access";
+      default: return type;
     }
-    
-    stopAllStreams();
-    sessionStorage.setItem("cameraProctorEnabled", "false");
-    router.push(`/assessment/${assessmentId}/${token}/instructions`);
-  }, [assessmentId, token, email, router, stopAllStreams]);
+  };
+  
+  // Helper to get check icon
+  const getCheckIcon = (type: CheckType) => {
+    switch (type) {
+      case "browser":
+        return (
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <circle cx="12" cy="12" r="4" />
+            <line x1="21.17" y1="8" x2="12" y2="8" />
+            <line x1="3.95" y1="6.06" x2="8.54" y2="14" />
+            <line x1="10.88" y1="21.94" x2="15.46" y2="14" />
+          </svg>
+        );
+      case "network":
+        return (
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+            <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+            <line x1="12" y1="20" x2="12.01" y2="20" />
+          </svg>
+        );
+      case "camera":
+        return (
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+            <circle cx="12" cy="13" r="4" />
+          </svg>
+        );
+      case "microphone":
+        return (
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="23" />
+            <line x1="8" y1="23" x2="16" y2="23" />
+          </svg>
+        );
+      default:
+        return null;
+    }
+  };
   
   if (isLoading) {
     return (
@@ -226,9 +249,9 @@ export default function PrecheckPage() {
 
   return (
     <div style={{ backgroundColor: "#f7f3e8", minHeight: "100vh", padding: "2rem" }}>
-      <div style={{ maxWidth: "1000px", margin: "0 auto" }}>
+      <div style={{ maxWidth: "700px", margin: "0 auto" }}>
         {/* Header */}
-        <div style={{ marginBottom: "2rem" }}>
+        <div style={{ marginBottom: "2rem", textAlign: "center" }}>
           <h1 style={{ fontSize: "1.75rem", fontWeight: 700, color: "#1e293b", marginBottom: "0.5rem" }}>
             System Pre-Check
           </h1>
@@ -244,39 +267,265 @@ export default function PrecheckPage() {
           )}
         </div>
         
-        {/* Consent Notice */}
-        <div
-          style={{
-            backgroundColor: "#fffbeb",
-            border: "1px solid #fcd34d",
-            borderRadius: "0.5rem",
-            padding: "1rem",
-            marginBottom: "1.5rem",
-            display: "flex",
-            alignItems: "flex-start",
-            gap: "0.75rem",
-          }}
-        >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#d97706"
-            strokeWidth="2"
-            style={{ flexShrink: 0, marginTop: "2px" }}
-          >
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-          </svg>
-          <div style={{ fontSize: "0.8125rem", color: "#92400e", lineHeight: 1.6 }}>
-            <strong>Privacy Notice:</strong> We will access your camera and microphone to validate 
-            your environment. No audio or video is recorded during this check. Streams are released 
-            immediately after each test completes.
+        {/* Progress Indicator */}
+        <div style={{ marginBottom: "2rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+            <span style={{ fontSize: "0.875rem", color: "#64748b" }}>
+              Step {Math.min(currentCheckIndex + 1, CHECK_ORDER.length)} of {CHECK_ORDER.length}
+            </span>
+            <span style={{ fontSize: "0.875rem", color: "#64748b" }}>
+              {CHECK_ORDER.filter(type => checks[type]?.status === "passed").length} / {CHECK_ORDER.length} passed
+            </span>
+          </div>
+          <div style={{ height: "8px", backgroundColor: "#e2e8f0", borderRadius: "4px", overflow: "hidden" }}>
+            <div
+              style={{
+                height: "100%",
+                width: `${(CHECK_ORDER.filter(type => checks[type]?.status === "passed").length / CHECK_ORDER.length) * 100}%`,
+                backgroundColor: "#10b981",
+                borderRadius: "4px",
+                transition: "width 0.3s ease",
+              }}
+            />
           </div>
         </div>
         
+        {/* Check Steps */}
+        <div style={{ marginBottom: "2rem" }}>
+          {CHECK_ORDER.map((type, index) => {
+            const check = checks[type];
+            const isCurrentStep = index === currentCheckIndex;
+            const isPassed = check?.status === "passed";
+            const isFailed = check?.status === "failed";
+            const isRunning = check?.status === "running";
+            const isPending = check?.status === "pending";
+            const isCompleted = index < currentCheckIndex || isPassed;
+            
+            return (
+              <div
+                key={type}
+                style={{
+                  backgroundColor: isCurrentStep ? "#ffffff" : isPassed ? "#f0fdf4" : "#f8fafc",
+                  border: isCurrentStep ? "2px solid #6953a3" : isPassed ? "1px solid #86efac" : isFailed ? "1px solid #fecaca" : "1px solid #e2e8f0",
+                  borderRadius: "0.75rem",
+                  padding: "1.25rem",
+                  marginBottom: "0.75rem",
+                  transition: "all 0.2s ease",
+                  boxShadow: isCurrentStep ? "0 4px 12px rgba(105, 83, 163, 0.15)" : "none",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+                  {/* Step Number / Status Icon */}
+                  <div
+                    style={{
+                      width: "48px",
+                      height: "48px",
+                      borderRadius: "50%",
+                      backgroundColor: isPassed ? "#10b981" : isFailed ? "#ef4444" : isCurrentStep ? "#6953a3" : "#e2e8f0",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      color: isPassed || isFailed || isCurrentStep ? "#ffffff" : "#94a3b8",
+                    }}
+                  >
+                    {isPassed ? (
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    ) : isFailed ? (
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    ) : isRunning ? (
+                      <svg
+                        width="24"
+                        height="24"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        style={{ animation: "spin 1s linear infinite" }}
+                      >
+                        <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                      </svg>
+                    ) : (
+                      getCheckIcon(type)
+                    )}
+                  </div>
+                  
+                  {/* Check Info */}
+                  <div style={{ flex: 1 }}>
+                    <h3 style={{ 
+                      fontSize: "1rem", 
+                      fontWeight: 600, 
+                      color: isPassed ? "#065f46" : isFailed ? "#dc2626" : "#1e293b",
+                      margin: 0,
+                    }}>
+                      {getCheckLabel(type)}
+                    </h3>
+                    <p style={{ 
+                      fontSize: "0.8125rem", 
+                      color: isPassed ? "#047857" : isFailed ? "#dc2626" : "#64748b",
+                      margin: "0.25rem 0 0 0",
+                    }}>
+                      {check?.message || "Waiting..."}
+                    </p>
+                  </div>
+                  
+                  {/* Action Button */}
+                  {isCurrentStep && !isPassed && (
+                    <button
+                      type="button"
+                      onClick={handleRunCurrentCheck}
+                      disabled={isRunning || isCheckingSequence}
+                      style={{
+                        padding: "0.5rem 1rem",
+                        backgroundColor: isRunning ? "#e2e8f0" : "#6953a3",
+                        color: isRunning ? "#94a3b8" : "#ffffff",
+                        border: "none",
+                        borderRadius: "0.5rem",
+                        fontSize: "0.875rem",
+                        fontWeight: 500,
+                        cursor: isRunning ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.5rem",
+                      }}
+                    >
+                      {isRunning ? "Checking..." : isFailed ? "Retry" : "Check"}
+                    </button>
+                  )}
+                  
+                  {isPassed && isCurrentStep && currentCheckIndex < CHECK_ORDER.length - 1 && (
+                    <button
+                      type="button"
+                      onClick={handleNextCheck}
+                      style={{
+                        padding: "0.5rem 1rem",
+                        backgroundColor: "#10b981",
+                        color: "#ffffff",
+                        border: "none",
+                        borderRadius: "0.5rem",
+                        fontSize: "0.875rem",
+                        fontWeight: 500,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.5rem",
+                      }}
+                    >
+                      Next
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+                
+                {/* Camera Preview */}
+                {type === "camera" && isCurrentStep && cameraStream && (
+                  <div style={{ marginTop: "1rem" }}>
+                    <video
+                      autoPlay
+                      playsInline
+                      muted
+                      ref={(el) => {
+                        if (el && cameraStream) {
+                          el.srcObject = cameraStream;
+                        }
+                      }}
+                      style={{
+                        width: "100%",
+                        maxWidth: "320px",
+                        borderRadius: "0.5rem",
+                        backgroundColor: "#000",
+                        transform: "scaleX(-1)",
+                      }}
+                    />
+                  </div>
+                )}
+                
+                {/* Audio Level */}
+                {type === "microphone" && isCurrentStep && checks.microphone?.status === "passed" && (
+                  <div style={{ marginTop: "1rem" }}>
+                    <p style={{ fontSize: "0.75rem", color: "#64748b", marginBottom: "0.5rem" }}>
+                      Speak to test your microphone:
+                    </p>
+                    <div style={{ height: "8px", backgroundColor: "#e2e8f0", borderRadius: "4px", overflow: "hidden" }}>
+                      <div
+                        style={{
+                          height: "100%",
+                          width: `${audioLevel * 100}%`,
+                          backgroundColor: audioLevel > 0.5 ? "#10b981" : audioLevel > 0.2 ? "#eab308" : "#94a3b8",
+                          borderRadius: "4px",
+                          transition: "width 0.1s ease",
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+                
+                {/* Network Metrics */}
+                {type === "network" && isCurrentStep && networkMetrics && (
+                  <div style={{ marginTop: "1rem" }}>
+                    <NetworkTest
+                      metrics={networkMetrics}
+                      isRunning={checks.network.status === "running"}
+                      maxLatencyMs={maxLatencyMs}
+                      minDownloadMbps={minDownloadMbps}
+                    />
+                  </div>
+                )}
+                
+                {/* Browser Warnings */}
+                {type === "browser" && isCurrentStep && browserInfo.warnings.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: "1rem",
+                      padding: "0.75rem",
+                      backgroundColor: "#fffbeb",
+                      borderRadius: "0.375rem",
+                      fontSize: "0.75rem",
+                      color: "#92400e",
+                    }}
+                  >
+                    {browserInfo.warnings.map((warning, i) => (
+                      <p key={i} style={{ margin: i > 0 ? "0.25rem 0 0 0" : 0 }}>
+                        ⚠️ {warning}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                
+                {/* Troubleshooting */}
+                {isFailed && isCurrentStep && check?.troubleshooting && (
+                  <div
+                    style={{
+                      marginTop: "1rem",
+                      padding: "0.75rem",
+                      backgroundColor: "#fef2f2",
+                      borderRadius: "0.375rem",
+                      fontSize: "0.75rem",
+                      color: "#dc2626",
+                    }}
+                  >
+                    <strong>Troubleshooting:</strong>
+                    <ul style={{ margin: "0.5rem 0 0 0", paddingLeft: "1rem" }}>
+                      {check.troubleshooting.slice(0, 3).map((tip, i) => (
+                        <li key={i} style={{ marginBottom: "0.25rem" }}>{tip}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        
         {/* System Ready Banner */}
-        {mandatoryChecksPassed && (
+        {allSequentialChecksPassed && (
           <div
             style={{
               backgroundColor: "#ecfdf5",
@@ -306,14 +555,36 @@ export default function PrecheckPage() {
                 <polyline points="20 6 9 17 4 12" />
               </svg>
             </div>
-            <div>
+            <div style={{ flex: 1 }}>
               <h2 style={{ fontSize: "1.25rem", fontWeight: 700, color: "#065f46", margin: 0 }}>
-                System Ready
+                All Checks Passed!
               </h2>
               <p style={{ fontSize: "0.875rem", color: "#047857", margin: "0.25rem 0 0 0" }}>
-                All mandatory checks have passed. You can proceed to the exam.
+                Your system is ready. Click proceed to start the exam.
               </p>
             </div>
+            <button
+              type="button"
+              onClick={handleProceed}
+              style={{
+                padding: "0.75rem 1.5rem",
+                backgroundColor: "#10b981",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "0.5rem",
+                fontSize: "0.9375rem",
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+              }}
+            >
+              Proceed to Exam
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
           </div>
         )}
         
@@ -333,226 +604,36 @@ export default function PrecheckPage() {
           </div>
         )}
         
-        {/* Check Cards Grid */}
+        {/* Privacy Notice */}
         <div
           style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-            gap: "1rem",
+            backgroundColor: "#fffbeb",
+            border: "1px solid #fcd34d",
+            borderRadius: "0.5rem",
+            padding: "1rem",
             marginBottom: "1.5rem",
-          }}
-        >
-          {/* Camera Check */}
-          <PrecheckCard
-            check={checks.camera}
-            onRetry={() => handleRetry("camera")}
-            isRetrying={retryingCheck === "camera"}
-            videoStream={cameraStream}
-            devices={cameras}
-            selectedDevice={selectedCamera}
-            onDeviceChange={setSelectedCamera}
-          />
-          
-          {/* Microphone Check */}
-          <PrecheckCard
-            check={checks.microphone}
-            onRetry={() => handleRetry("microphone")}
-            isRetrying={retryingCheck === "microphone"}
-            audioLevel={audioLevel}
-            devices={microphones}
-            selectedDevice={selectedMicrophone}
-            onDeviceChange={setSelectedMicrophone}
-          />
-          
-          {/* Network Check */}
-          <PrecheckCard
-            check={checks.network}
-            onRetry={() => handleRetry("network")}
-            isRetrying={retryingCheck === "network"}
-          >
-            <NetworkTest
-              metrics={networkMetrics}
-              isRunning={checks.network.status === "running"}
-              maxLatencyMs={maxLatencyMs}
-              minDownloadMbps={minDownloadMbps}
-            />
-          </PrecheckCard>
-          
-          {/* Fullscreen Check */}
-          <PrecheckCard
-            check={checks.fullscreen}
-            onRetry={() => handleRetry("fullscreen")}
-            isRetrying={retryingCheck === "fullscreen"}
-            onAction={handleFullscreenTest}
-            actionLabel="Test Fullscreen"
-          />
-          
-          {/* Tab Switch Check */}
-          <PrecheckCard
-            check={checks.tabSwitch}
-            onRetry={() => handleRetry("tabSwitch")}
-            isRetrying={retryingCheck === "tabSwitch"}
-            onAction={() => handleRetry("tabSwitch")}
-            actionLabel="Test Tab Switch"
-          >
-            {checks.tabSwitch.status === "running" && (
-              <div
-                style={{
-                  padding: "0.75rem",
-                  backgroundColor: "#eff6ff",
-                  borderRadius: "0.375rem",
-                  fontSize: "0.8125rem",
-                  color: "#1e40af",
-                }}
-              >
-                <strong>Instructions:</strong> Switch to another browser tab for 1-2 seconds, 
-                then return to this tab to complete the test.
-              </div>
-            )}
-          </PrecheckCard>
-          
-          {/* Browser Check */}
-          <PrecheckCard
-            check={checks.browser}
-            onRetry={() => handleRetry("browser")}
-            isRetrying={retryingCheck === "browser"}
-          >
-            {browserInfo.warnings.length > 0 && (
-              <div
-                style={{
-                  padding: "0.5rem",
-                  backgroundColor: "#fffbeb",
-                  borderRadius: "0.375rem",
-                  fontSize: "0.75rem",
-                  color: "#92400e",
-                }}
-              >
-                {browserInfo.warnings.map((warning, i) => (
-                  <p key={i} style={{ margin: i > 0 ? "0.25rem 0 0 0" : 0 }}>
-                    ⚠️ {warning}
-                  </p>
-                ))}
-              </div>
-            )}
-          </PrecheckCard>
-        </div>
-        
-        {/* Action Buttons */}
-        <div
-          style={{
             display: "flex",
-            flexWrap: "wrap",
+            alignItems: "flex-start",
             gap: "0.75rem",
-            marginBottom: "1.5rem",
           }}
         >
-          {/* Run All Checks */}
-          <button
-            type="button"
-            onClick={runAllChecks}
-            disabled={isRunning}
-            style={{
-              padding: "0.75rem 1.5rem",
-              backgroundColor: isRunning ? "#e2e8f0" : "#f1f5f9",
-              color: isRunning ? "#94a3b8" : "#475569",
-              border: "1px solid #e2e8f0",
-              borderRadius: "0.5rem",
-              fontSize: "0.9375rem",
-              fontWeight: 500,
-              cursor: isRunning ? "not-allowed" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              transition: "background-color 0.2s",
-            }}
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#d97706"
+            strokeWidth="2"
+            style={{ flexShrink: 0, marginTop: "2px" }}
           >
-            {isRunning ? (
-              <>
-                <svg
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  style={{ animation: "spin 1s linear infinite" }}
-                >
-                  <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
-                </svg>
-                Running Checks...
-              </>
-            ) : (
-              <>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="23 4 23 10 17 10" />
-                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                </svg>
-                Run All Checks
-              </>
-            )}
-          </button>
-          
-          {/* Proceed to Exam */}
-          <button
-            type="button"
-            onClick={handleProceed}
-            disabled={!isReady || isRunning}
-            style={{
-              padding: "0.75rem 1.5rem",
-              backgroundColor: isReady && !isRunning ? "#10b981" : "#94a3b8",
-              color: "#ffffff",
-              border: "none",
-              borderRadius: "0.5rem",
-              fontSize: "0.9375rem",
-              fontWeight: 600,
-              cursor: isReady && !isRunning ? "pointer" : "not-allowed",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              transition: "background-color 0.2s",
-              marginLeft: "auto",
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-            Proceed to Exam
-          </button>
-        </div>
-        
-        {/* Proceed with Risk (when camera failed but policy allows) */}
-        {!cameraRequired && checks.camera.status === "failed" && (
-          <div
-            style={{
-              backgroundColor: "#fef2f2",
-              border: "1px solid #fecaca",
-              borderRadius: "0.5rem",
-              padding: "1rem",
-              marginBottom: "1.5rem",
-            }}
-          >
-            <p style={{ fontSize: "0.875rem", color: "#dc2626", marginBottom: "0.75rem" }}>
-              <strong>Warning:</strong> Camera check failed. You can proceed without camera proctoring, 
-              but this may affect your assessment validity.
-            </p>
-            <button
-              type="button"
-              onClick={handleProceedWithRisk}
-              style={{
-                padding: "0.5rem 1rem",
-                backgroundColor: "#fef2f2",
-                color: "#dc2626",
-                border: "1px solid #fecaca",
-                borderRadius: "0.375rem",
-                fontSize: "0.875rem",
-                fontWeight: 500,
-                cursor: "pointer",
-              }}
-            >
-              Proceed Without Camera
-            </button>
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
+          <div style={{ fontSize: "0.8125rem", color: "#92400e", lineHeight: 1.6 }}>
+            <strong>Privacy Notice:</strong> We will access your camera and microphone to validate 
+            your environment. No audio or video is recorded during this check. Streams are released 
+            immediately after each test completes.
           </div>
-        )}
+        </div>
         
         {/* Debug Logs Panel */}
         {debugMode && (

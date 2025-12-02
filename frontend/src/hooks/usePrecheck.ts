@@ -930,20 +930,18 @@ export function usePrecheck({
   // Computed State
   // ============================================================================
   
+  // Mandatory checks are now: browser, network, camera, microphone (removed fullscreen and tabSwitch)
   const mandatoryChecksPassed = 
+    checks.browser.status === "passed" &&
+    checks.network.status === "passed" &&
     checks.camera.status === "passed" &&
-    checks.microphone.status === "passed" &&
-    checks.fullscreen.status === "passed" &&
-    checks.network.status === "passed";
+    checks.microphone.status === "passed";
   
-  const allChecksPassed = 
-    mandatoryChecksPassed &&
-    checks.tabSwitch.status === "passed" &&
-    checks.browser.status === "passed";
+  const allChecksPassed = mandatoryChecksPassed;
   
   const isReady = cameraRequired && microphoneRequired
     ? mandatoryChecksPassed
-    : checks.fullscreen.status === "passed" && checks.network.status === "passed";
+    : checks.browser.status === "passed" && checks.network.status === "passed";
   
   // ============================================================================
   // Cleanup on unmount
