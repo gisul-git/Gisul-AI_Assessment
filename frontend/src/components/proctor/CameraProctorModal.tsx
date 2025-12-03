@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 
 interface CameraProctorModalProps {
   isOpen: boolean;
-  onAccept: (referencePhoto: string, screenStream: MediaStream) => Promise<boolean>;
+  onAccept: (referencePhoto: string, screenStream: MediaStream, webcamStream: MediaStream) => Promise<boolean>;
   candidateName?: string;
   isLoading?: boolean;
   cameraError?: string | null;
@@ -50,8 +50,9 @@ export function CameraProctorModal({
       startCameraPreview();
     }
     
-    // Cleanup when modal closes
-    if (!isOpen) {
+    // Only cleanup when modal closes WITHOUT starting assessment
+    // If isStarting is true, we're navigating to take page and streams should persist
+    if (!isOpen && !isStarting) {
       if (previewStreamRef.current) {
         previewStreamRef.current.getTracks().forEach(track => track.stop());
         previewStreamRef.current = null;
@@ -67,7 +68,7 @@ export function CameraProctorModal({
         setScreenStream(null);
       }
     }
-  }, [isOpen]);
+  }, [isOpen, isStarting]);
 
   // Focus the accept button when modal opens and consent is checked
   useEffect(() => {
@@ -91,17 +92,7 @@ export function CameraProctorModal({
     return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [isOpen]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (previewStreamRef.current) {
-        previewStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (screenStream) {
-        screenStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, []);
+  // Note: Don't cleanup streams on unmount - they're passed to take page for live proctoring
 
   const startCameraPreview = useCallback(async () => {
     try {
@@ -227,23 +218,20 @@ export function CameraProctorModal({
 
   // Start assessment
   const handleStartAssessment = async () => {
-    if (!capturedPhoto || !screenStream) return;
+    if (!capturedPhoto || !screenStream || !previewStreamRef.current) return;
     
     setIsStarting(true);
     setLocalError(null);
     
-    // Stop camera preview (the actual proctoring camera will start separately)
-    if (previewStreamRef.current) {
-      previewStreamRef.current.getTracks().forEach(track => track.stop());
-      previewStreamRef.current = null;
-      setCameraReady(false);
-    }
-    
     try {
-      const success = await onAccept(capturedPhoto, screenStream);
+      // Pass webcam stream instead of stopping it - it will be used for live proctoring
+      const webcamStream = previewStreamRef.current;
+      const success = await onAccept(capturedPhoto, screenStream, webcamStream);
+      
       if (!success) {
         setLocalError("Failed to start. Please try again.");
       }
+      // Don't stop streams here - they'll be used on the take page
     } catch (error) {
       setLocalError("An error occurred. Please try again.");
     } finally {

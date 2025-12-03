@@ -193,37 +193,33 @@ export function useLiveProctor({
       isStreamingRef.current = true;
       setIsStreaming(true);
       
-      // Check for pre-captured screen stream from instructions page
-      let screenStream: MediaStream | null = null;
-      if (typeof window !== "undefined" && (window as any).__screenStream) {
-        screenStream = (window as any).__screenStream as MediaStream;
-        // Check if stream is still active
-        if (screenStream.active && screenStream.getVideoTracks().length > 0) {
-          log("Using pre-captured screen stream from instructions page");
-        } else {
-          log("Pre-captured screen stream is no longer active, requesting new one...");
-          screenStream = null;
-        }
-      }
+      // Use pre-captured streams from props (captured in instructions page)
+      // This avoids asking for permissions again!
       
-      // Use pre-captured webcam if available, otherwise request new
+      // Check webcam stream
       let webcamStream: MediaStream;
-      if (preWebcamStream && preWebcamStream.active) {
-        log("Using pre-captured webcam stream");
+      if (preWebcamStream && preWebcamStream.active && preWebcamStream.getVideoTracks().length > 0) {
+        log("Using pre-captured webcam stream (no permission dialog!)");
         webcamStream = preWebcamStream;
       } else {
-        log("Requesting webcam...");
+        // Fallback: request new webcam (will show permission dialog)
+        log("Pre-captured webcam not available, requesting new one...");
         webcamStream = await navigator.mediaDevices.getUserMedia({
           video: { width: 640, height: 480 },
           audio: true,
         });
-        log("Webcam stream acquired");
+        log("Webcam stream acquired (fallback)");
       }
       webcamStreamRef.current = webcamStream;
       
-      // If no pre-captured screen stream, request new one
-      if (!screenStream) {
-        log("Requesting screen share...");
+      // Check screen stream
+      let screenStream: MediaStream;
+      if (preScreenStream && preScreenStream.active && preScreenStream.getVideoTracks().length > 0) {
+        log("Using pre-captured screen stream (no permission dialog!)");
+        screenStream = preScreenStream;
+      } else {
+        // Fallback: request new screen share (will show permission dialog)
+        log("Pre-captured screen not available, requesting new one...");
         screenStream = await navigator.mediaDevices.getDisplayMedia({
           video: { 
             displaySurface: "monitor",
@@ -232,7 +228,7 @@ export function useLiveProctor({
           },
           audio: false,
         });
-        log("Screen stream acquired");
+        log("Screen stream acquired (fallback)");
       }
       screenStreamRef.current = screenStream;
       
@@ -323,7 +319,7 @@ export function useLiveProctor({
       setIsStreaming(false);
       // Don't call cleanupStreaming here to avoid loop
     }
-  }, [log, onError, onSessionStart, cleanupStreaming, startPollingForAnswer, recordProctorEvent]);
+  }, [log, onError, onSessionStart, cleanupStreaming, startPollingForAnswer, recordProctorEvent, preWebcamStream, preScreenStream]);
 
   // Poll for pending sessions from admin - now startStreamingWithSession is defined
   const checkForPendingSession = useCallback(async () => {

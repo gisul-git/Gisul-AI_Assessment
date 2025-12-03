@@ -66,8 +66,12 @@ export default function CandidateAssessmentPage() {
   const [showFullscreenWarning, setShowFullscreenWarning] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [cameraProctorEnabled, setCameraProctorEnabled] = useState(false);
+  
+  // Pre-captured streams from instructions page for live proctoring
+  const [preCapturedWebcamStream, setPreCapturedWebcamStream] = useState<MediaStream | null>(null);
+  const [preCapturedScreenStream, setPreCapturedScreenStream] = useState<MediaStream | null>(null);
 
-  // Check debug mode from URL params and camera proctor state
+  // Check debug mode from URL params and camera proctor state + pre-captured streams
   useEffect(() => {
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search);
@@ -76,6 +80,20 @@ export default function CandidateAssessmentPage() {
       // Check if camera proctoring was enabled in instructions
       const cameraEnabled = sessionStorage.getItem("cameraProctorEnabled") === "true";
       setCameraProctorEnabled(cameraEnabled);
+      
+      // Get pre-captured streams from instructions page
+      const webcamStream = (window as any).__webcamStream as MediaStream | undefined;
+      const screenStream = (window as any).__screenStream as MediaStream | undefined;
+      
+      if (webcamStream && webcamStream.active) {
+        console.log("[LiveProctor] Found pre-captured webcam stream");
+        setPreCapturedWebcamStream(webcamStream);
+      }
+      
+      if (screenStream && screenStream.active) {
+        console.log("[LiveProctor] Found pre-captured screen stream");
+        setPreCapturedScreenStream(screenStream);
+      }
     }
   }, []);
 
@@ -144,13 +162,15 @@ export default function CandidateAssessmentPage() {
   });
 
   // Live proctoring hook for human proctoring (admin watching candidate)
-  // Streaming starts automatically when admin requests - no consent popup needed
+  // Uses pre-captured streams from instructions page - NO permission dialogs!
   const {
     isStreaming: isLiveStreaming,
     connectionState: liveConnectionState,
   } = useLiveProctor({
     assessmentId: (id as string) || "",
     candidateId: candidateEmail || "",
+    webcamStream: preCapturedWebcamStream,   // Pass pre-captured webcam
+    screenStream: preCapturedScreenStream,   // Pass pre-captured screen
     onSessionStart: () => {
       console.log("[LiveProctor] Session started - admin is watching");
     },

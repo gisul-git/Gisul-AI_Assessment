@@ -198,8 +198,12 @@ export default function AssessmentInstructionsPage() {
     upload();
   }, [id, email]);
 
-  // Handle camera consent accepted with reference photo and screen stream
-  const handleCameraAccept = async (referencePhoto: string, screenStream: MediaStream): Promise<boolean> => {
+  // Handle camera consent accepted with reference photo, screen stream, and webcam stream
+  const handleCameraAccept = async (
+    referencePhoto: string, 
+    screenStream: MediaStream,
+    webcamStream: MediaStream
+  ): Promise<boolean> => {
     setIsStarting(true);
     setCameraError(null);
     
@@ -208,10 +212,15 @@ export default function AssessmentInstructionsPage() {
     sessionStorage.setItem("candidateReferencePhoto", referencePhoto);
     sessionStorage.setItem("screenShareGranted", "true");
     
-    // Store screen stream in a global variable so take.tsx can access it
+    // Store streams in global variables so take.tsx can access them
     // (streams can't be stored in sessionStorage)
     if (typeof window !== "undefined") {
       (window as any).__screenStream = screenStream;
+      (window as any).__webcamStream = webcamStream;
+      console.log("[Instructions] Streams stored for live proctoring", {
+        hasScreenStream: !!screenStream,
+        hasWebcamStream: !!webcamStream,
+      });
     }
     
     // Start background upload immediately (fire-and-forget)
