@@ -190,31 +190,48 @@ export function useLiveProctor({
       isStreamingRef.current = true;
       setIsStreaming(true);
       
-      // Get webcam stream
-      log("Requesting webcam...");
-      const webcamStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480 },
-        audio: true,
-      });
-      webcamStreamRef.current = webcamStream;
-      log("Webcam stream acquired");
+      // Check for pre-captured screen stream from instructions page
+      let screenStream: MediaStream | null = null;
+      if (typeof window !== "undefined" && (window as any).__screenStream) {
+        screenStream = (window as any).__screenStream as MediaStream;
+        // Check if stream is still active
+        if (screenStream.active && screenStream.getVideoTracks().length > 0) {
+          log("Using pre-captured screen stream from instructions page");
+        } else {
+          log("Pre-captured screen stream is no longer active, requesting new one...");
+          screenStream = null;
+        }
+      }
       
-      // Get screen share stream - prefer entire screen (monitor)
-      log("Requesting screen share...");
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { 
-          displaySurface: "monitor", // Prefer entire screen over tab/window
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-        audio: false,
-        // @ts-ignore - preferCurrentTab is not in types but supported
-        preferCurrentTab: false, // Don't prefer current tab
-        selfBrowserSurface: "exclude", // Exclude current browser from options
-        systemAudio: "exclude",
-      });
+      // Use pre-captured webcam if available, otherwise request new
+      let webcamStream: MediaStream;
+      if (preWebcamStream && preWebcamStream.active) {
+        log("Using pre-captured webcam stream");
+        webcamStream = preWebcamStream;
+      } else {
+        log("Requesting webcam...");
+        webcamStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 },
+          audio: true,
+        });
+        log("Webcam stream acquired");
+      }
+      webcamStreamRef.current = webcamStream;
+      
+      // If no pre-captured screen stream, request new one
+      if (!screenStream) {
+        log("Requesting screen share...");
+        screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { 
+            displaySurface: "monitor",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+        log("Screen stream acquired");
+      }
       screenStreamRef.current = screenStream;
-      log("Screen stream acquired");
       
       // Handle screen share stop
       screenStream.getVideoTracks()[0].onended = () => {

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 
 interface CameraProctorModalProps {
   isOpen: boolean;
-  onAccept: (referencePhoto: string) => Promise<boolean>;
+  onAccept: (referencePhoto: string, screenStream: MediaStream) => Promise<boolean>;
   candidateName?: string;
   isLoading?: boolean;
   cameraError?: string | null;
@@ -10,7 +10,8 @@ interface CameraProctorModalProps {
 
 /**
  * Modal for camera proctoring consent and initialization.
- * Camera auto-starts when modal opens. Requires photo capture and consent before starting proctoring.
+ * Step 1: Camera preview + capture photo
+ * Step 2: Screen share + Start Assessment
  */
 export function CameraProctorModal({
   isOpen,
@@ -22,8 +23,12 @@ export function CameraProctorModal({
   const modalRef = useRef<HTMLDivElement>(null);
   const modalContainerRef = useRef<HTMLDivElement>(null);
   const acceptButtonRef = useRef<HTMLButtonElement>(null);
+  
+  // Step management: 1 = camera/photo, 2 = screen share
+  const [currentStep, setCurrentStep] = useState(1);
+  
+  // Step 1 states
   const [consentChecked, setConsentChecked] = useState(false);
-  const [isStarting, setIsStarting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [isCameraLoading, setIsCameraLoading] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
@@ -32,6 +37,12 @@ export function CameraProctorModal({
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
+  
+  // Step 2 states
+  const [isRequestingScreen, setIsRequestingScreen] = useState(false);
+  const [screenShareGranted, setScreenShareGranted] = useState(false);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
 
   // Auto-start camera when modal opens
   useEffect(() => {
@@ -40,11 +51,21 @@ export function CameraProctorModal({
     }
     
     // Cleanup when modal closes
-    if (!isOpen && previewStreamRef.current) {
-      previewStreamRef.current.getTracks().forEach(track => track.stop());
-      previewStreamRef.current = null;
+    if (!isOpen) {
+      if (previewStreamRef.current) {
+        previewStreamRef.current.getTracks().forEach(track => track.stop());
+        previewStreamRef.current = null;
+      }
       setCameraReady(false);
       setIsCameraLoading(false);
+      setCurrentStep(1);
+      setCapturedPhoto(null);
+      setConsentChecked(false);
+      setScreenShareGranted(false);
+      if (screenStream) {
+        screenStream.getTracks().forEach(track => track.stop());
+        setScreenStream(null);
+      }
     }
   }, [isOpen]);
 
@@ -70,37 +91,14 @@ export function CameraProctorModal({
     return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [isOpen]);
 
-  // Trap focus within modal
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleTab = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !modalRef.current) return;
-
-      const focusableElements = modalRef.current.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      );
-      const firstElement = focusableElements[0];
-      const lastElement = focusableElements[focusableElements.length - 1];
-
-      if (e.shiftKey && document.activeElement === firstElement) {
-        e.preventDefault();
-        lastElement?.focus();
-      } else if (!e.shiftKey && document.activeElement === lastElement) {
-        e.preventDefault();
-        firstElement?.focus();
-      }
-    };
-
-    document.addEventListener("keydown", handleTab);
-    return () => document.removeEventListener("keydown", handleTab);
-  }, [isOpen]);
-
-  // Cleanup preview stream on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (previewStreamRef.current) {
         previewStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (screenStream) {
+        screenStream.getTracks().forEach(track => track.stop());
       }
     };
   }, []);
@@ -132,7 +130,7 @@ export function CameraProctorModal({
     }
   }, []);
 
-  // Capture photo from video stream (optimized: smaller resolution, lower quality)
+  // Capture photo from video stream
   const handleCapturePhoto = useCallback(() => {
     if (!previewVideoRef.current || !canvasRef.current || !cameraReady) return;
     
@@ -147,13 +145,12 @@ export function CameraProctorModal({
       return;
     }
     
-    // Use smaller resolution for faster processing (640x480 max)
+    // Use smaller resolution for faster processing
     const maxWidth = 640;
     const maxHeight = 480;
     let targetWidth = video.videoWidth;
     let targetHeight = video.videoHeight;
     
-    // Scale down if needed
     if (targetWidth > maxWidth) {
       const ratio = maxWidth / targetWidth;
       targetWidth = maxWidth;
@@ -165,20 +162,15 @@ export function CameraProctorModal({
       targetWidth = Math.round(targetWidth * ratio);
     }
     
-    // Set canvas dimensions
     canvas.width = targetWidth;
     canvas.height = targetHeight;
     
-    // Draw mirrored image (to match what user sees)
     ctx.translate(canvas.width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // Convert to base64 with lower quality (0.6) for faster upload
     const photoData = canvas.toDataURL("image/jpeg", 0.6);
     setCapturedPhoto(photoData);
-    
-    // Store reference photo in sessionStorage
     sessionStorage.setItem("candidateReferencePhoto", photoData);
     
     setIsCapturing(false);
@@ -190,13 +182,57 @@ export function CameraProctorModal({
     sessionStorage.removeItem("candidateReferencePhoto");
   }, []);
 
-  const handleAcceptClick = async () => {
-    if (!consentChecked || !capturedPhoto) return;
+  // Move to Step 2
+  const handleNextStep = useCallback(() => {
+    if (capturedPhoto && consentChecked) {
+      setCurrentStep(2);
+    }
+  }, [capturedPhoto, consentChecked]);
+
+  // Request screen share
+  const handleRequestScreenShare = useCallback(async () => {
+    setIsRequestingScreen(true);
+    setLocalError(null);
+    
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { 
+          displaySurface: "monitor", // Prefer entire screen
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      });
+      
+      setScreenStream(stream);
+      setScreenShareGranted(true);
+      
+      // Store in sessionStorage that screen share was granted
+      sessionStorage.setItem("screenShareGranted", "true");
+      
+      // Handle if user stops sharing
+      stream.getVideoTracks()[0].onended = () => {
+        setScreenShareGranted(false);
+        setScreenStream(null);
+        sessionStorage.removeItem("screenShareGranted");
+      };
+      
+    } catch (error) {
+      console.error("Screen share error:", error);
+      setLocalError("Screen sharing is required. Please click 'Share Screen' and select 'Entire Screen'.");
+    } finally {
+      setIsRequestingScreen(false);
+    }
+  }, []);
+
+  // Start assessment
+  const handleStartAssessment = async () => {
+    if (!capturedPhoto || !screenStream) return;
     
     setIsStarting(true);
     setLocalError(null);
     
-    // Stop preview if running
+    // Stop camera preview (the actual proctoring camera will start separately)
     if (previewStreamRef.current) {
       previewStreamRef.current.getTracks().forEach(track => track.stop());
       previewStreamRef.current = null;
@@ -204,18 +240,12 @@ export function CameraProctorModal({
     }
     
     try {
-      const success = await onAccept(capturedPhoto);
+      const success = await onAccept(capturedPhoto, screenStream);
       if (!success) {
-        setLocalError("Failed to start camera proctoring. Please try again.");
-        // Restart preview on failure
-        setCapturedPhoto(null);
-        startCameraPreview();
+        setLocalError("Failed to start. Please try again.");
       }
     } catch (error) {
       setLocalError("An error occurred. Please try again.");
-      // Restart preview on failure
-      setCapturedPhoto(null);
-      startCameraPreview();
     } finally {
       setIsStarting(false);
     }
@@ -246,7 +276,6 @@ export function CameraProctorModal({
       aria-labelledby="camera-proctor-modal-title"
       onClick={(e) => e.stopPropagation()}
     >
-      {/* Hidden canvas for photo capture */}
       <canvas ref={canvasRef} style={{ display: "none" }} />
       
       <div
@@ -262,391 +291,321 @@ export function CameraProctorModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Title Row */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.75rem" }}>
-          <div
-            style={{
-              width: "40px",
-              height: "40px",
-              backgroundColor: displayError ? "#fef2f2" : "#ecfdf5",
-              borderRadius: "50%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-            }}
-          >
-            {displayError ? (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
-            ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2">
-                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                <circle cx="12" cy="13" r="4" />
-              </svg>
-            )}
+        {/* Step Indicator */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem", marginBottom: "1rem" }}>
+          <div style={{
+            width: "28px",
+            height: "28px",
+            borderRadius: "50%",
+            backgroundColor: currentStep >= 1 ? "#10b981" : "#e2e8f0",
+            color: currentStep >= 1 ? "#fff" : "#64748b",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "0.75rem",
+            fontWeight: 700,
+          }}>
+            {currentStep > 1 ? "✓" : "1"}
           </div>
-          <div>
-            <h2
-              id="camera-proctor-modal-title"
-              style={{
-                fontSize: "1.125rem",
-                fontWeight: 700,
-                color: displayError ? "#dc2626" : "#1e293b",
-                margin: 0,
-              }}
-            >
-              {displayError ? "Camera Access Required" : "Camera Proctoring"}
-            </h2>
-            {candidateName && !displayError && (
-              <p style={{ margin: 0, color: "#64748b", fontSize: "0.8125rem" }}>
-                Welcome, <strong>{candidateName}</strong>
-              </p>
-            )}
+          <div style={{ width: "40px", height: "2px", backgroundColor: currentStep >= 2 ? "#10b981" : "#e2e8f0" }} />
+          <div style={{
+            width: "28px",
+            height: "28px",
+            borderRadius: "50%",
+            backgroundColor: currentStep >= 2 ? "#10b981" : "#e2e8f0",
+            color: currentStep >= 2 ? "#fff" : "#64748b",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "0.75rem",
+            fontWeight: 700,
+          }}>
+            2
           </div>
         </div>
 
-        {/* Error message */}
-        {displayError && (
-          <div
-            style={{
-              backgroundColor: "#fef2f2",
-              border: "1px solid #fecaca",
-              borderRadius: "0.5rem",
-              padding: "0.75rem",
-              marginBottom: "0.75rem",
-              textAlign: "center",
-            }}
-          >
-            <p style={{ margin: 0, color: "#dc2626", fontSize: "0.8125rem", fontWeight: 500 }}>
-              {displayError}
-            </p>
-            <button
-              type="button"
-              onClick={startCameraPreview}
-              style={{
-                marginTop: "0.5rem",
-                padding: "0.375rem 0.75rem",
-                backgroundColor: "#fef2f2",
-                color: "#dc2626",
-                border: "1px solid #fecaca",
-                borderRadius: "0.375rem",
-                fontSize: "0.75rem",
-                fontWeight: 500,
-                cursor: "pointer",
-              }}
-            >
-              Retry Camera Access
-            </button>
-          </div>
-        )}
-
-        {/* Camera Preview / Captured Photo Display */}
-        <div
-          style={{
-            marginBottom: "0.75rem",
-            borderRadius: "0.5rem",
-            overflow: "hidden",
-            backgroundColor: "#000",
-            aspectRatio: "16/10",
-            position: "relative",
-            border: capturedPhoto ? "2px solid #10b981" : "2px solid #e2e8f0",
-          }}
-        >
-          {/* Loading indicator */}
-          {isCameraLoading && (
-            <div
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
+        {/* STEP 1: Camera & Photo Capture */}
+        {currentStep === 1 && (
+          <>
+            {/* Title Row */}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.75rem" }}>
+              <div style={{
+                width: "40px",
+                height: "40px",
+                backgroundColor: displayError ? "#fef2f2" : "#ecfdf5",
+                borderRadius: "50%",
                 display: "flex",
-                flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                backgroundColor: "#1e293b",
-                zIndex: 1,
-              }}
-            >
-              <svg
-                width="40"
-                height="40"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="#94a3b8"
-                strokeWidth="2"
-                style={{ animation: "spin 1s linear infinite" }}
-              >
-                <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
-              </svg>
-              <p style={{ color: "#94a3b8", marginTop: "0.75rem", fontSize: "0.875rem" }}>
-                Initializing camera...
-              </p>
-            </div>
-          )}
-          
-          {/* Show captured photo if available */}
-          {capturedPhoto ? (
-            <img
-              src={capturedPhoto}
-              alt="Captured reference photo"
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-              }}
-            />
-          ) : (
-            <>
-              {/* Video element */}
-              <video
-                ref={previewVideoRef}
-                autoPlay
-                playsInline
-                muted
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
-                  transform: "scaleX(-1)",
-                  display: cameraReady ? "block" : "none",
-                }}
-              />
-              
-              {/* Placeholder when camera not ready and not loading */}
-              {!isCameraLoading && !cameraReady && !displayError && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    backgroundColor: "#1e293b",
-                  }}
-                >
-                  <svg
-                    width="48"
-                    height="48"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="#64748b"
-                    strokeWidth="1.5"
-                  >
-                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                    <circle cx="12" cy="13" r="4" />
-                  </svg>
-                  <p style={{ color: "#64748b", marginTop: "0.5rem", fontSize: "0.875rem" }}>
-                    Camera preview
+                flexShrink: 0,
+              }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={displayError ? "#ef4444" : "#10b981"} strokeWidth="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+              </div>
+              <div>
+                <h2 id="camera-proctor-modal-title" style={{ fontSize: "1.125rem", fontWeight: 700, color: "#1e293b", margin: 0 }}>
+                  Step 1: Capture Your Photo
+                </h2>
+                {candidateName && (
+                  <p style={{ margin: 0, color: "#64748b", fontSize: "0.8125rem" }}>
+                    Welcome, <strong>{candidateName}</strong>
                   </p>
+                )}
+              </div>
+            </div>
+
+            {/* Error message */}
+            {displayError && (
+              <div style={{ backgroundColor: "#fef2f2", border: "1px solid #fecaca", borderRadius: "0.5rem", padding: "0.75rem", marginBottom: "0.75rem", textAlign: "center" }}>
+                <p style={{ margin: 0, color: "#dc2626", fontSize: "0.8125rem", fontWeight: 500 }}>{displayError}</p>
+                <button type="button" onClick={startCameraPreview} style={{ marginTop: "0.5rem", padding: "0.375rem 0.75rem", backgroundColor: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca", borderRadius: "0.375rem", fontSize: "0.75rem", fontWeight: 500, cursor: "pointer" }}>
+                  Retry Camera Access
+                </button>
+              </div>
+            )}
+
+            {/* Camera Preview / Captured Photo */}
+            <div style={{ marginBottom: "0.75rem", borderRadius: "0.5rem", overflow: "hidden", backgroundColor: "#000", aspectRatio: "16/10", position: "relative", border: capturedPhoto ? "2px solid #10b981" : "2px solid #e2e8f0" }}>
+              {isCameraLoading && (
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "#1e293b", zIndex: 1 }}>
+                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}>
+                    <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                  </svg>
+                  <p style={{ color: "#94a3b8", marginTop: "0.75rem", fontSize: "0.875rem" }}>Initializing camera...</p>
                 </div>
               )}
-            </>
-          )}
-          
-          {/* Captured badge */}
-          {capturedPhoto && (
-            <div
-              style={{
-                position: "absolute",
-                top: "0.75rem",
-                left: "0.75rem",
-                backgroundColor: "#10b981",
-                color: "#fff",
-                padding: "0.375rem 0.75rem",
-                borderRadius: "1rem",
-                fontSize: "0.75rem",
-                fontWeight: 600,
-                display: "flex",
-                alignItems: "center",
-                gap: "0.375rem",
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-              Photo Captured
+              
+              {capturedPhoto ? (
+                <img src={capturedPhoto} alt="Captured photo" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              ) : (
+                <video ref={previewVideoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)", display: cameraReady ? "block" : "none" }} />
+              )}
+              
+              {capturedPhoto && (
+                <div style={{ position: "absolute", top: "0.75rem", left: "0.75rem", backgroundColor: "#10b981", color: "#fff", padding: "0.375rem 0.75rem", borderRadius: "1rem", fontSize: "0.75rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.375rem" }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+                  Photo Captured
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Capture / Retake Photo Buttons */}
-        <div style={{ marginBottom: "0.75rem" }}>
-          {!capturedPhoto ? (
+            {/* Capture / Retake Buttons */}
+            <div style={{ marginBottom: "0.75rem" }}>
+              {!capturedPhoto ? (
+                <button type="button" onClick={handleCapturePhoto} disabled={!cameraReady || isCapturing} style={{ width: "100%", padding: "0.625rem", backgroundColor: cameraReady && !isCapturing ? "#3b82f6" : "#94a3b8", color: "#ffffff", border: "none", borderRadius: "0.375rem", fontSize: "0.875rem", fontWeight: 600, cursor: cameraReady && !isCapturing ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+                  {isCapturing ? "Capturing..." : "📸 Capture Your Photo"}
+                </button>
+              ) : (
+                <button type="button" onClick={handleRetakePhoto} style={{ width: "100%", padding: "0.5rem", backgroundColor: "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0", borderRadius: "0.375rem", fontSize: "0.8125rem", fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.375rem" }}>
+                  🔄 Retake Photo
+                </button>
+              )}
+            </div>
+
+            {/* Consent Checkbox */}
+            <label style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", cursor: "pointer", marginBottom: "0.75rem", padding: "0.5rem 0.625rem", backgroundColor: consentChecked ? "#f0fdf4" : "#f8fafc", border: `1.5px solid ${consentChecked ? "#10b981" : "#e2e8f0"}`, borderRadius: "0.375rem" }}>
+              <input type="checkbox" checked={consentChecked} onChange={(e) => setConsentChecked(e.target.checked)} style={{ width: "1rem", height: "1rem", marginTop: "1px", accentColor: "#10b981" }} />
+              <span style={{ fontSize: "0.75rem", color: "#334155", lineHeight: 1.4 }}>
+                I consent to camera and screen monitoring during this assessment
+              </span>
+            </label>
+
+            {/* Next Button */}
             <button
               type="button"
-              onClick={handleCapturePhoto}
-              disabled={!cameraReady || isCapturing}
+              onClick={handleNextStep}
+              disabled={!capturedPhoto || !consentChecked}
               style={{
                 width: "100%",
                 padding: "0.625rem",
-                backgroundColor: cameraReady && !isCapturing ? "#3b82f6" : "#94a3b8",
+                backgroundColor: capturedPhoto && consentChecked ? "#10b981" : "#94a3b8",
                 color: "#ffffff",
                 border: "none",
                 borderRadius: "0.375rem",
                 fontSize: "0.875rem",
                 fontWeight: 600,
-                cursor: cameraReady && !isCapturing ? "pointer" : "not-allowed",
+                cursor: capturedPhoto && consentChecked ? "pointer" : "not-allowed",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: "0.5rem",
+                gap: "0.375rem",
               }}
             >
-              {isCapturing ? (
+              Next: Share Screen →
+            </button>
+
+            {(!capturedPhoto || !consentChecked) && (
+              <p style={{ textAlign: "center", color: "#94a3b8", fontSize: "0.6875rem", marginTop: "0.5rem" }}>
+                {!capturedPhoto ? "📸 Capture photo first" : "☑️ Check consent box"}
+              </p>
+            )}
+          </>
+        )}
+
+        {/* STEP 2: Screen Share */}
+        {currentStep === 2 && (
+          <>
+            {/* Title Row */}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.75rem" }}>
+              <div style={{
+                width: "40px",
+                height: "40px",
+                backgroundColor: screenShareGranted ? "#ecfdf5" : "#fef3c7",
+                borderRadius: "50%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+              }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={screenShareGranted ? "#10b981" : "#f59e0b"} strokeWidth="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
+                </svg>
+              </div>
+              <div>
+                <h2 style={{ fontSize: "1.125rem", fontWeight: 700, color: "#1e293b", margin: 0 }}>
+                  Step 2: Share Your Screen
+                </h2>
+                <p style={{ margin: 0, color: "#64748b", fontSize: "0.8125rem" }}>
+                  Select "Entire Screen" for proctoring
+                </p>
+              </div>
+            </div>
+
+            {/* Error message */}
+            {localError && (
+              <div style={{ backgroundColor: "#fef2f2", border: "1px solid #fecaca", borderRadius: "0.5rem", padding: "0.75rem", marginBottom: "0.75rem", textAlign: "center" }}>
+                <p style={{ margin: 0, color: "#dc2626", fontSize: "0.8125rem", fontWeight: 500 }}>{localError}</p>
+              </div>
+            )}
+
+            {/* Screen Share Status */}
+            <div style={{ marginBottom: "1rem", padding: "1rem", backgroundColor: screenShareGranted ? "#f0fdf4" : "#fffbeb", borderRadius: "0.5rem", border: `1px solid ${screenShareGranted ? "#86efac" : "#fcd34d"}`, textAlign: "center" }}>
+              {screenShareGranted ? (
                 <>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}>
-                    <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
-                  </svg>
-                  Capturing...
+                  <div style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>✅</div>
+                  <p style={{ margin: 0, color: "#16a34a", fontSize: "0.9375rem", fontWeight: 600 }}>Screen Sharing Active</p>
+                  <p style={{ margin: "0.25rem 0 0", color: "#22c55e", fontSize: "0.75rem" }}>Your entire screen is being shared</p>
                 </>
               ) : (
-                <>📸 Capture Your Photo</>
+                <>
+                  <div style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>🖥️</div>
+                  <p style={{ margin: 0, color: "#92400e", fontSize: "0.9375rem", fontWeight: 600 }}>Screen Share Required</p>
+                  <p style={{ margin: "0.25rem 0 0", color: "#a16207", fontSize: "0.75rem" }}>Click below and select "Entire screen"</p>
+                </>
               )}
-            </button>
-          ) : (
+            </div>
+
+            {/* Instructions */}
+            {!screenShareGranted && (
+              <div style={{ backgroundColor: "#f8fafc", borderRadius: "0.375rem", padding: "0.75rem", marginBottom: "0.75rem", fontSize: "0.75rem", color: "#475569" }}>
+                <strong style={{ color: "#334155" }}>Instructions:</strong>
+                <ol style={{ margin: "0.5rem 0 0", paddingLeft: "1.25rem" }}>
+                  <li>Click "Share Screen" button below</li>
+                  <li>Select the <strong>"Entire screen"</strong> tab</li>
+                  <li>Select your screen and click "Share"</li>
+                </ol>
+              </div>
+            )}
+
+            {/* Share Screen Button or Start Assessment Button */}
+            {!screenShareGranted ? (
+              <button
+                type="button"
+                onClick={handleRequestScreenShare}
+                disabled={isRequestingScreen}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem",
+                  backgroundColor: isRequestingScreen ? "#94a3b8" : "#f59e0b",
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: "0.375rem",
+                  fontSize: "0.9375rem",
+                  fontWeight: 600,
+                  cursor: isRequestingScreen ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "0.5rem",
+                }}
+              >
+                {isRequestingScreen ? (
+                  <>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}>
+                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                    </svg>
+                    Requesting...
+                  </>
+                ) : (
+                  <>🖥️ Share Screen</>
+                )}
+              </button>
+            ) : (
+              <button
+                ref={acceptButtonRef}
+                type="button"
+                onClick={handleStartAssessment}
+                disabled={isStarting || isLoading}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem",
+                  backgroundColor: isStarting || isLoading ? "#94a3b8" : "#10b981",
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: "0.375rem",
+                  fontSize: "0.9375rem",
+                  fontWeight: 600,
+                  cursor: isStarting || isLoading ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "0.5rem",
+                }}
+              >
+                {isStarting || isLoading ? (
+                  <>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}>
+                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                    </svg>
+                    Starting Assessment...
+                  </>
+                ) : (
+                  <>🚀 Start Assessment</>
+                )}
+              </button>
+            )}
+
+            {/* Back button */}
             <button
               type="button"
-              onClick={handleRetakePhoto}
+              onClick={() => { setCurrentStep(1); setLocalError(null); }}
               style={{
                 width: "100%",
+                marginTop: "0.5rem",
                 padding: "0.5rem",
-                backgroundColor: "#f1f5f9",
-                color: "#475569",
-                border: "1px solid #e2e8f0",
+                backgroundColor: "transparent",
+                color: "#64748b",
+                border: "none",
                 borderRadius: "0.375rem",
                 fontSize: "0.8125rem",
                 fontWeight: 500,
                 cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "0.375rem",
               }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="23 4 23 10 17 10" />
-                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-              </svg>
-              Retake Photo
+              ← Back to Photo
             </button>
-          )}
-        </div>
-
-        {/* Compact Info */}
-        <div
-          style={{
-            backgroundColor: "#f8fafc",
-            borderRadius: "0.375rem",
-            padding: "0.625rem 0.75rem",
-            marginBottom: "0.75rem",
-            fontSize: "0.75rem",
-            color: "#475569",
-            lineHeight: 1.5,
-          }}
-        >
-          <strong style={{ color: "#334155" }}>Monitoring:</strong> Face presence, gaze direction, multiple faces. 
-          <span style={{ color: "#f59e0b" }}> Video stays local — snapshots only on violations.</span>
-        </div>
-
-        {/* Consent Checkbox */}
-        <label
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: "0.5rem",
-            cursor: "pointer",
-            marginBottom: "0.75rem",
-            padding: "0.5rem 0.625rem",
-            backgroundColor: consentChecked ? "#f0fdf4" : "#f8fafc",
-            border: `1.5px solid ${consentChecked ? "#10b981" : "#e2e8f0"}`,
-            borderRadius: "0.375rem",
-            transition: "all 0.2s",
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={consentChecked}
-            onChange={(e) => setConsentChecked(e.target.checked)}
-            style={{
-              width: "1rem",
-              height: "1rem",
-              marginTop: "1px",
-              accentColor: "#10b981",
-            }}
-          />
-          <span style={{ fontSize: "0.75rem", color: "#334155", lineHeight: 1.4 }}>
-            I consent to camera monitoring during this assessment
-          </span>
-        </label>
-
-        {/* Action Button - Only Accept */}
-        {(() => {
-          const canProceed = consentChecked && capturedPhoto && !isStarting && !isLoading;
-          return (
-            <button
-              ref={acceptButtonRef}
-              type="button"
-              onClick={handleAcceptClick}
-              disabled={!canProceed}
-              style={{
-                width: "100%",
-                padding: "0.625rem",
-                backgroundColor: canProceed ? "#10b981" : "#94a3b8",
-                color: "#ffffff",
-                border: "none",
-                borderRadius: "0.375rem",
-                fontSize: "0.875rem",
-                fontWeight: 600,
-                cursor: canProceed ? "pointer" : "not-allowed",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "0.375rem",
-              }}
-            >
-              {isStarting || isLoading ? (
-                <>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}>
-                    <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
-                  </svg>
-                  Starting...
-                </>
-              ) : (
-                <>✓ Start Assessment</>
-              )}
-            </button>
-          );
-        })()}
-
-        {/* Helper text */}
-        {(!capturedPhoto || !consentChecked) && (
-          <p style={{ textAlign: "center", color: "#94a3b8", fontSize: "0.6875rem", marginTop: "0.5rem", margin: "0.5rem 0 0" }}>
-            {!capturedPhoto ? "📸 Capture photo first" : "☑️ Check consent box"}
-          </p>
+          </>
         )}
       </div>
 
-      {/* CSS for animations */}
       <style jsx>{`
         @keyframes cameraModalFadeIn {
-          from {
-            opacity: 0;
-            transform: scale(0.95);
-          }
-          to {
-            opacity: 1;
-            transform: scale(1);
-          }
+          from { opacity: 0; transform: scale(0.95); }
+          to { opacity: 1; transform: scale(1); }
         }
         @keyframes spin {
           from { transform: rotate(0deg); }

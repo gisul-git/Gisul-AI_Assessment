@@ -198,14 +198,21 @@ export default function AssessmentInstructionsPage() {
     upload();
   }, [id, email]);
 
-  // Handle camera consent accepted with reference photo
-  const handleCameraAccept = async (referencePhoto: string): Promise<boolean> => {
+  // Handle camera consent accepted with reference photo and screen stream
+  const handleCameraAccept = async (referencePhoto: string, screenStream: MediaStream): Promise<boolean> => {
     setIsStarting(true);
     setCameraError(null);
     
     // Store camera consent and reference photo in session FIRST (instant)
     sessionStorage.setItem("cameraProctorEnabled", "true");
     sessionStorage.setItem("candidateReferencePhoto", referencePhoto);
+    sessionStorage.setItem("screenShareGranted", "true");
+    
+    // Store screen stream in a global variable so take.tsx can access it
+    // (streams can't be stored in sessionStorage)
+    if (typeof window !== "undefined") {
+      (window as any).__screenStream = screenStream;
+    }
     
     // Start background upload immediately (fire-and-forget)
     uploadReferencePhotoBackground(referencePhoto);
