@@ -65,7 +65,7 @@ if cors_origins_str and cors_origins_str != "http://localhost:3000":
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins_list,  # Restricted to specific origins
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     allow_credentials=True,
     expose_headers=["*"],
@@ -161,6 +161,11 @@ async def csrf_protection_middleware(request: Request, call_next):
 async def startup() -> None:
     await connect_to_mongo()
     db = get_database()
+    
+    # Initialize DSA MongoDB connection (uses .env for MONGO_URI and MONGO_DB)
+    from app.dsa.database import connect_to_dsa_mongo
+    await connect_to_dsa_mongo()
+    
     # Ensure indexes for optimal query performance (supports 100k+ requests)
     
     # Users collection indexes
@@ -196,6 +201,9 @@ async def startup() -> None:
 @app.on_event("shutdown")
 async def shutdown() -> None:
     await close_mongo_connection()
+    # Close DSA MongoDB connection
+    from app.dsa.database import close_dsa_mongo_connection
+    await close_dsa_mongo_connection()
 
 
 @app.exception_handler(RequestValidationError)
@@ -298,4 +306,14 @@ app.include_router(users.router)
 app.include_router(assessments.router)
 app.include_router(candidate.router)
 app.include_router(proctor.router)
+
+# DSA Competency Module Routers
+from .dsa.routers import tests as dsa_tests, questions as dsa_questions, assessment as dsa_assessment, admin as dsa_admin, run as dsa_run, submissions as dsa_submissions
+
+app.include_router(dsa_admin.router, prefix="/api/dsa/admin", tags=["dsa-admin"])
+app.include_router(dsa_questions.router, prefix="/api/dsa/questions", tags=["dsa-questions"])
+app.include_router(dsa_submissions.router, prefix="/api/dsa/submissions", tags=["dsa-submissions"])
+app.include_router(dsa_tests.router, prefix="/api/dsa/tests", tags=["dsa-tests"])
+app.include_router(dsa_run.router, prefix="/api/dsa", tags=["dsa-execution"])
+app.include_router(dsa_assessment.router, prefix="/api/dsa/assessment", tags=["dsa-assessment"])
 

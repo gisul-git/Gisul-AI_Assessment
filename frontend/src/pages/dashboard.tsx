@@ -6,6 +6,7 @@ import { requireAuth } from "../lib/auth";
 import Link from "next/link";
 import Image from "next/image";
 import axios from "axios";
+import dsaApi from "../lib/dsa/api";
 
 interface Assessment {
   id: string;
@@ -20,6 +21,7 @@ interface Assessment {
   } | null;
   createdAt?: string;
   updatedAt?: string;
+  type?: 'assessment' | 'dsa'; // Add type to distinguish
 }
 
 interface DashboardPageProps {
@@ -86,12 +88,55 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
       setLoading(true);
       setError(null);
       
-      const response = await axios.get("/api/assessments/list");
-      if (response.data?.success && response.data?.data) {
-        setAssessments(response.data.data);
-      } else {
-        setError(response.data?.message || "Failed to load assessments");
+      // Fetch both regular assessments and DSA tests in parallel
+      const [assessmentsResponse, dsaTestsResponse] = await Promise.allSettled([
+        axios.get("/api/assessments/list"),
+        dsaApi.get("/tests")
+      ]);
+      
+      const allAssessments: Assessment[] = [];
+      
+      // Process regular assessments
+      if (assessmentsResponse.status === 'fulfilled' && assessmentsResponse.value.data?.success && assessmentsResponse.value.data?.data) {
+        const regularAssessments = assessmentsResponse.value.data.data.map((a: any) => ({
+          ...a,
+          type: 'assessment' as const
+        }));
+        allAssessments.push(...regularAssessments);
+      } else if (assessmentsResponse.status === 'rejected') {
+        console.error("Error fetching regular assessments:", assessmentsResponse.reason);
       }
+      
+      // Process DSA tests
+      if (dsaTestsResponse.status === 'fulfilled' && Array.isArray(dsaTestsResponse.value.data)) {
+        const dsaTests = dsaTestsResponse.value.data.map((test: any) => ({
+          id: test.id || test._id,
+          title: test.title || 'Untitled DSA Test',
+          status: test.is_published ? 'published' : 'draft',
+          hasSchedule: !!(test.start_time && test.end_time),
+          scheduleStatus: test.start_time && test.end_time ? {
+            startTime: test.start_time,
+            endTime: test.end_time,
+            duration: test.duration_minutes || 0,
+            isActive: test.is_active || false
+          } : null,
+          createdAt: test.created_at || null,
+          updatedAt: test.updated_at || null,
+          type: 'dsa' as const
+        }));
+        allAssessments.push(...dsaTests);
+      } else if (dsaTestsResponse.status === 'rejected') {
+        console.error("Error fetching DSA tests:", dsaTestsResponse.reason);
+      }
+      
+      // Sort by creation date (newest first)
+      allAssessments.sort((a, b) => {
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateB - dateA;
+      });
+      
+      setAssessments(allAssessments);
     } catch (err: any) {
       console.error("Error fetching assessments:", err);
       const errorMsg = err.response?.data?.message || err.response?.data?.detail || err.message || "Failed to load assessments";
@@ -108,19 +153,26 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
     }
   };
 
-  const handleDeleteAssessment = async (assessmentId: string, assessmentTitle: string) => {
+  const handleDeleteAssessment = async (assessmentId: string, assessmentTitle: string, assessmentType?: 'assessment' | 'dsa') => {
     if (!confirm(`Are you sure you want to delete "${assessmentTitle}"? This action cannot be undone.`)) {
       return;
     }
 
     try {
       setError(null);
-      const response = await axios.delete(`/api/assessments/delete-assessment?assessmentId=${assessmentId}`);
       
+      if (assessmentType === 'dsa') {
+        // Delete DSA test
+        await dsaApi.delete(`/tests/${assessmentId}`);
+        setAssessments(assessments.filter((a) => a.id !== assessmentId));
+      } else {
+        // Delete regular assessment
+      const response = await axios.delete(`/api/assessments/delete-assessment?assessmentId=${assessmentId}`);
       if (response.data?.success) {
         setAssessments(assessments.filter((a) => a.id !== assessmentId));
       } else {
         setError(response.data?.message || "Failed to delete assessment");
+        }
       }
     } catch (err: any) {
       console.error("Error deleting assessment:", err);
@@ -214,11 +266,18 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                 </span>
               </p>
             </div>
-            <Link href="/assessments/create-new" style={{ width: "100%" }}>
+            <div style={{ display: "flex", gap: "1rem", width: "100%" }}>
+              <Link href="/assessments/create-new" style={{ flex: 1 }}>
               <button type="button" className="btn-primary" style={{ marginTop: 0, width: "100%" }}>
                 + Create New Assessment
               </button>
             </Link>
+              <Link href="/dsa" style={{ flex: 1 }}>
+                <button type="button" className="btn-primary" style={{ marginTop: 0, width: "100%" }}>
+                  Create DSA Competency
+                </button>
+              </Link>
+            </div>
           </div>
         </div>
 
@@ -301,7 +360,13 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                       backgroundColor: "#ffffff",
                       cursor: "pointer",
                     }}
-                    onClick={() => router.push(`/assessments/${assessment.id}`)}
+                    onClick={() => {
+                      if (assessment.type === 'dsa') {
+                        router.push(`/dsa/tests`);
+                      } else {
+                        router.push(`/assessments/${assessment.id}`);
+                      }
+                    }}
                   >
                     <div
                       style={{
@@ -322,18 +387,33 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                       >
                         {assessment.title}
                       </h3>
-                      <span
-                        className="badge"
-                        style={{
-                          backgroundColor: statusColors.bg,
-                          color: statusColors.text,
-                          border: `1px solid ${statusColors.border}`,
-                          textTransform: "capitalize",
-                          marginLeft: "0.5rem",
-                        }}
-                      >
-                        {assessment.status}
-                      </span>
+                      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                        {assessment.type === 'dsa' && (
+                          <span
+                            className="badge"
+                            style={{
+                              backgroundColor: "#E8FAF0",
+                              color: "#2D7A52",
+                              border: "1px solid #A8E8BC",
+                              fontSize: "0.75rem",
+                              padding: "0.25rem 0.5rem",
+                            }}
+                          >
+                            DSA
+                          </span>
+                        )}
+                        <span
+                          className="badge"
+                          style={{
+                            backgroundColor: statusColors.bg,
+                            color: statusColors.text,
+                            border: `1px solid ${statusColors.border}`,
+                            textTransform: "capitalize",
+                          }}
+                        >
+                          {assessment.status}
+                        </span>
+                      </div>
                     </div>
                     <div style={{ color: "#2D7A52", fontSize: "0.875rem", marginBottom: "0.75rem" }}>
                       <div style={{ marginBottom: "0.25rem" }}>
@@ -361,7 +441,11 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                         }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          router.push(`/assessments/${assessment.id}`);
+                          if (assessment.type === 'dsa') {
+                            router.push(`/dsa/tests`);
+                          } else {
+                            router.push(`/assessments/${assessment.id}`);
+                          }
                         }}
                       >
                         View
@@ -387,7 +471,7 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                         }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDeleteAssessment(assessment.id, assessment.title);
+                          handleDeleteAssessment(assessment.id, assessment.title, assessment.type);
                         }}
                       >
                         Delete

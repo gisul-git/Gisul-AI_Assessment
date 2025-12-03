@@ -26,21 +26,42 @@ Assessment Platform backend.
    `requirements.txt`) and provide the following values as needed:
 
    ```env
+   # MongoDB Configuration (used by both main app and DSA module)
    MONGO_URI=mongodb://localhost:27017/ai_assessment
    MONGO_DB=ai_assessment
+   
+   # JWT Configuration
    JWT_SECRET=change-me
    JWT_EXP_MINUTES=10080
+   
+   # OAuth
    GOOGLE_CLIENT_ID=your-google-client-id
+   
+   # AI Services
    OPENAI_API_KEY=your-openai-api-key
+   
+   # Email Service (AWS SES)
    AWS_ACCESS_KEY=your-aws-access-key
    AWS_SECRET_KEY=your-aws-secret-key
    AWS_REGION=us-east-1
    AWS_EMAIL_SOURCE=sender@example.com
+   
+   # DSA Code Competency Module Configuration
+   JUDGE0_URL=http://168.220.236.250:2358
+   JUDGE0_TIMEOUT=60
+   JUDGE0_POLL_INTERVAL=1.5
+   JUDGE0_MAX_POLLS=20
+   JUDGE0_API_KEY=  # Optional: For RapidAPI hosted Judge0
    ```
 
    Only the variables required for the features you use need to be set. For
    example, if email delivery is not required in your environment, you can omit
    the AWS values.
+   
+   **Note for DSA Module**: The DSA (Data Structures and Algorithms) code competency module uses:
+   - The same MongoDB connection as the main app (via `MONGO_URI` and `MONGO_DB`)
+   - Judge0 for code execution (configured via `JUDGE0_URL` and related variables)
+   - OpenAI for AI feedback (uses `OPENAI_API_KEY` from main config)
 
 4. **Run the application**
 
