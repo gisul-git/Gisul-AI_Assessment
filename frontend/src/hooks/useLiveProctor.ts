@@ -41,7 +41,6 @@ export function useLiveProctor({
   const [isStreaming, setIsStreaming] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<string>("disconnected");
-  const [showConsentPopup, setShowConsentPopup] = useState(false);
   
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const webcamStreamRef = useRef<MediaStream | null>(null);
@@ -73,15 +72,18 @@ export function useLiveProctor({
         const session = data.data.session as LiveProctorSession;
         log("Pending session found", session);
         
-        if (session.status === "pending" && !showConsentPopup) {
+        if (session.status === "pending") {
           pendingSessionRef.current = session;
-          setShowConsentPopup(true);
+          // Auto-start streaming immediately without asking - mandatory feature
+          // Browser will still show native prompts for screen share (unavoidable)
+          log("Auto-starting streaming for human proctoring...");
+          startStreamingInternal(session);
         }
       }
     } catch (err) {
       log("Error checking for pending session", err);
     }
-  }, [assessmentId, candidateId, isStreaming, showConsentPopup, log]);
+  }, [assessmentId, candidateId, isStreaming, log]);
 
   // Start polling for admin sessions
   useEffect(() => {
@@ -98,14 +100,8 @@ export function useLiveProctor({
     };
   }, [assessmentId, candidateId, checkForPendingSession]);
 
-  // Create peer connection and start streaming
-  const startStreaming = useCallback(async () => {
-    const session = pendingSessionRef.current;
-    if (!session) {
-      onError?.("No pending session found");
-      return;
-    }
-
+  // Internal function to start streaming with a session
+  const startStreamingInternal = useCallback(async (session: LiveProctorSession) => {
     try {
       log("Starting streams...");
       
@@ -201,7 +197,6 @@ export function useLiveProctor({
       log("Offer sent, waiting for answer...");
       setSessionId(session.sessionId);
       setIsStreaming(true);
-      setShowConsentPopup(false);
       setConnectionState("connecting");
       
       // Poll for answer and ICE candidates from admin
@@ -213,6 +208,16 @@ export function useLiveProctor({
       stopStreaming();
     }
   }, [log, onError, onSessionStart]);
+
+  // Public function to manually start streaming (if needed)
+  const startStreaming = useCallback(async () => {
+    const session = pendingSessionRef.current;
+    if (!session) {
+      onError?.("No pending session found");
+      return;
+    }
+    await startStreamingInternal(session);
+  }, [startStreamingInternal, onError]);
 
   // Poll for answer from admin
   const startPollingForAnswer = useCallback(
@@ -329,13 +334,6 @@ export function useLiveProctor({
     }
   };
 
-  // Decline consent
-  const declineConsent = useCallback(() => {
-    setShowConsentPopup(false);
-    pendingSessionRef.current = null;
-    log("User declined live proctoring consent");
-  }, [log]);
-
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -350,10 +348,8 @@ export function useLiveProctor({
     isStreaming,
     sessionId,
     connectionState,
-    showConsentPopup,
     startStreaming,
     stopStreaming,
-    declineConsent,
   };
 }
 

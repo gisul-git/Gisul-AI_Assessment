@@ -12,7 +12,7 @@ import axios from "axios";
 import { useProctor, type ProctorViolation } from "@/hooks/useProctor";
 import { useCameraProctor, type CameraProctorViolation } from "@/hooks/useCameraProctor";
 import { useLiveProctor } from "@/hooks/useLiveProctor";
-import { ProctorToast, FullscreenWarningBanner, ProctorDebugPanel, LiveProctorConsent } from "@/components/proctor";
+import { ProctorToast, FullscreenWarningBanner, ProctorDebugPanel } from "@/components/proctor";
 
 interface Question {
   questionText: string;
@@ -144,13 +144,10 @@ export default function CandidateAssessmentPage() {
   });
 
   // Live proctoring hook for human proctoring (admin watching candidate)
+  // Streaming starts automatically when admin requests - no consent popup needed
   const {
     isStreaming: isLiveStreaming,
-    sessionId: liveSessionId,
     connectionState: liveConnectionState,
-    showConsentPopup: showLiveProctorConsent,
-    startStreaming: startLiveStreaming,
-    stopStreaming: stopLiveStreaming,
   } = useLiveProctor({
     assessmentId: (id as string) || "",
     candidateId: candidateEmail || "",
@@ -1430,12 +1427,6 @@ export default function CandidateAssessmentPage() {
         onSimulateFullscreenExit={simulateFullscreenExit}
         onRequestFullscreen={requestFullscreen}
         onExitFullscreen={exitFullscreen}
-      />
-
-      {/* Live Proctoring Notification - shown when admin starts watching */}
-      <LiveProctorConsent
-        isVisible={showLiveProctorConsent}
-        onAccept={startLiveStreaming}
       />
 
       {/* Live Streaming Indicator */}
