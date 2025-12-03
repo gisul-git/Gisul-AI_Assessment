@@ -53,6 +53,8 @@ export function useLiveProctor({
   const icePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pendingSessionRef = useRef<LiveProctorSession | null>(null);
   const isStreamingRef = useRef(false); // Use ref to avoid stale closure
+  const processedSessionsRef = useRef<Set<string>>(new Set()); // Track processed sessions to avoid loops
+  const isConnectingRef = useRef(false); // Prevent multiple connection attempts
 
   const log = useCallback(
     (message: string, data?: unknown) => {
@@ -171,6 +173,7 @@ export function useLiveProctor({
     
     setIsStreaming(false);
     isStreamingRef.current = false;
+    isConnectingRef.current = false;
     setSessionId(null);
     setConnectionState("disconnected");
     pendingSessionRef.current = null;
@@ -316,34 +319,42 @@ export function useLiveProctor({
       log("Error starting stream", err);
       onError?.(err instanceof Error ? err.message : "Failed to start streaming");
       isStreamingRef.current = false;
+      isConnectingRef.current = false;
       setIsStreaming(false);
-      cleanupStreaming();
+      // Don't call cleanupStreaming here to avoid loop
     }
   }, [log, onError, onSessionStart, cleanupStreaming, startPollingForAnswer, recordProctorEvent]);
 
   // Poll for pending sessions from admin - now startStreamingWithSession is defined
   const checkForPendingSession = useCallback(async () => {
-    if (isStreamingRef.current || !assessmentId || !candidateId) {
+    // Skip if already streaming, connecting, or missing params
+    if (isStreamingRef.current || isConnectingRef.current || !assessmentId || !candidateId) {
       return;
     }
     
     try {
-      log(`Checking for pending session: ${assessmentId} / ${candidateId}`);
       const res = await fetch(
         `${API_URL}/api/proctor/live/pending/${assessmentId}/${encodeURIComponent(candidateId)}`
       );
       const data = await res.json();
       
-      log("Pending session response:", data);
-      
       if (data.success && data.data.hasSession) {
         const session = data.data.session as LiveProctorSession;
-        log("Pending session found!", session);
         
+        // Skip if we already processed this session
+        if (processedSessionsRef.current.has(session.sessionId)) {
+          return;
+        }
+        
+        // Only process pending sessions
         if (session.status === "pending") {
+          log("Pending session found!", session);
+          processedSessionsRef.current.add(session.sessionId);
           pendingSessionRef.current = session;
+          
           // Auto-start streaming immediately without asking - mandatory feature
           log("Auto-starting streaming for human proctoring...");
+          isConnectingRef.current = true;
           startStreamingWithSession(session);
         }
       }
@@ -387,15 +398,31 @@ export function useLiveProctor({
     await startStreamingWithSession(session);
   }, [startStreamingWithSession, onError]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount - use empty deps to only run once
   useEffect(() => {
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
       }
-      cleanupStreaming();
+      if (icePollIntervalRef.current) {
+        clearInterval(icePollIntervalRef.current);
+        icePollIntervalRef.current = null;
+      }
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+      }
+      if (webcamStreamRef.current) {
+        webcamStreamRef.current.getTracks().forEach(t => t.stop());
+        webcamStreamRef.current = null;
+      }
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(t => t.stop());
+        screenStreamRef.current = null;
+      }
     };
-  }, [cleanupStreaming]);
+  }, []);
 
   return {
     isStreaming,
