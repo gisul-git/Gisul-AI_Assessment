@@ -105,30 +105,33 @@ export function useMultiLiveProctorAdmin({
     });
     peerConnectionsRef.current.set(sessionId, pc);
 
-    // Track received streams
-    let webcamStream: MediaStream | null = null;
-    let screenStream: MediaStream | null = null;
+    // Track received streams - use order-based identification
+    // First video stream = webcam, second video stream = screen (matching how candidate adds them)
+    let receivedStreamCount = 0;
+    const receivedStreamIds = new Set<string>();
 
     pc.ontrack = (event) => {
-      log(`Received track from ${candidateName}:`, event.track.kind);
+      log(`Received track from ${candidateName}: ${event.track.kind}, streamId: ${event.streams?.[0]?.id}`);
       
       if (event.streams && event.streams[0]) {
         const stream = event.streams[0];
+        const streamId = stream.id;
         
-        // Determine if this is webcam or screen based on track label/settings
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
-          const settings = videoTrack.getSettings();
-          // Screen shares typically have higher resolution
-          if (settings.width && settings.width > 800) {
-            log(`Screen stream received from ${candidateName}`);
-            screenStream = stream;
-            updateCandidateStream(sessionId, { screenStream: stream });
-          } else {
-            log(`Webcam stream received from ${candidateName}`);
-            webcamStream = stream;
-            updateCandidateStream(sessionId, { webcamStream: stream });
-          }
+        // Skip if we already processed this stream
+        if (receivedStreamIds.has(streamId)) {
+          return;
+        }
+        receivedStreamIds.add(streamId);
+        receivedStreamCount++;
+        
+        // First stream = webcam, second stream = screen
+        // (This matches the order candidate adds tracks in useLiveProctor)
+        if (receivedStreamCount === 1) {
+          log(`Webcam stream received from ${candidateName} (first stream)`);
+          updateCandidateStream(sessionId, { webcamStream: stream });
+        } else if (receivedStreamCount === 2) {
+          log(`Screen stream received from ${candidateName} (second stream)`);
+          updateCandidateStream(sessionId, { screenStream: stream });
         }
       }
     };

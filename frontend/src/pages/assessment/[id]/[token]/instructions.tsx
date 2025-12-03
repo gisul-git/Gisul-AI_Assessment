@@ -132,14 +132,15 @@ export default function AssessmentInstructionsPage() {
     }
   }, []);
 
-  // Handle "Start Assessment" click - show fullscreen prompt
+  // Handle "Start Assessment" click - go directly to camera modal
+  // Fullscreen is now Step 3 inside the Camera Modal
   const handleStartClick = () => {
     if (!acknowledged || !id || !token) return;
     setFullscreenError(false);
-    setShowFullscreenPrompt(true);
+    setShowCameraPrompt(true); // Skip fullscreen prompt - it's now in camera modal
   };
 
-  // Handle "Enter Fullscreen" in the prompt
+  // Handle "Enter Fullscreen" in the prompt (kept for backwards compatibility)
   const handleEnterFullscreen = async () => {
     setIsStarting(true);
     setFullscreenError(false);
@@ -147,18 +148,12 @@ export default function AssessmentInstructionsPage() {
     const success = await requestFullscreen();
     
     if (success) {
-      // Record fullscreen enabled event
       await recordProctorEvent("FULLSCREEN_ENABLED", { source: "mandatory_prompt" });
-      
-      // Store fullscreen state
       sessionStorage.setItem("fullscreenAccepted", "true");
-      
-      // Close fullscreen prompt and show camera prompt
       setShowFullscreenPrompt(false);
       setShowCameraPrompt(true);
       setIsStarting(false);
     } else {
-      // Fullscreen failed
       setFullscreenError(true);
       setIsStarting(false);
     }
