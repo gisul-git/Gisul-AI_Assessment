@@ -299,6 +299,167 @@ async def get_pending_session(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+# ============================================================================
+# Multi-Candidate Live Proctoring Endpoints
+# ============================================================================
+
+class CreateMultiSessionRequest(BaseModel):
+    assessmentId: str
+    adminId: str
+
+
+@router.get("/live/active-candidates/{assessment_id}")
+async def get_active_candidates(
+    assessment_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """
+    Get all candidates who are currently taking the assessment.
+    These are candidates who have started but not yet submitted.
+    """
+    try:
+        # Find candidates who have started but not submitted
+        # Look in assessment_sessions collection for active sessions
+        active_sessions = await db.assessment_sessions.find({
+            "assessmentId": assessment_id,
+            "startedAt": {"$exists": True},
+            "submittedAt": {"$exists": False},
+        }).to_list(length=100)
+        
+        candidates = []
+        for session in active_sessions:
+            # Check if there's an active proctoring session
+            proctor_session = await db.proctor_sessions.find_one({
+                "assessmentId": assessment_id,
+                "candidateId": session.get("email", session.get("candidateId")),
+                "status": {"$in": ["pending", "offer_sent", "active"]},
+            })
+            
+            candidates.append({
+                "email": session.get("email", session.get("candidateId")),
+                "name": session.get("name", "Unknown"),
+                "startedAt": session.get("startedAt"),
+                "hasActiveSession": proctor_session is not None,
+                "sessionId": proctor_session.get("sessionId") if proctor_session else None,
+                "sessionStatus": proctor_session.get("status") if proctor_session else None,
+            })
+        
+        return success_response("Active candidates retrieved", {
+            "count": len(candidates),
+            "candidates": candidates
+        })
+    
+    except Exception as exc:
+        logger.exception(f"[LiveProctor] Error getting active candidates: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/live/create-multi-session")
+async def create_multi_live_sessions(
+    request: CreateMultiSessionRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """
+    Create live proctoring sessions for ALL active candidates in an assessment.
+    Used for the multi-candidate proctoring dashboard.
+    """
+    try:
+        # Find all active candidates (started but not submitted)
+        active_sessions = await db.assessment_sessions.find({
+            "assessmentId": request.assessmentId,
+            "startedAt": {"$exists": True},
+            "submittedAt": {"$exists": False},
+        }).to_list(length=100)
+        
+        created_sessions = []
+        
+        for session in active_sessions:
+            candidate_id = session.get("email", session.get("candidateId"))
+            
+            # End any existing sessions for this candidate
+            await db.proctor_sessions.update_many(
+                {
+                    "assessmentId": request.assessmentId,
+                    "candidateId": candidate_id,
+                    "status": {"$in": ["pending", "active", "offer_sent"]},
+                },
+                {
+                    "$set": {
+                        "status": "ended",
+                        "endedAt": datetime.now(timezone.utc).isoformat(),
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                    }
+                }
+            )
+            
+            # Create new session
+            session_id = str(uuid.uuid4())
+            
+            new_session = {
+                "sessionId": session_id,
+                "assessmentId": request.assessmentId,
+                "candidateId": candidate_id,
+                "candidateName": session.get("name", "Unknown"),
+                "adminId": request.adminId,
+                "status": "pending",
+                "offer": None,
+                "answer": None,
+                "candidateICE": [],
+                "adminICE": [],
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            
+            await db.proctor_sessions.insert_one(new_session)
+            
+            created_sessions.append({
+                "sessionId": session_id,
+                "candidateId": candidate_id,
+                "candidateName": session.get("name", "Unknown"),
+                "status": "pending",
+            })
+            
+            logger.info(f"[LiveProctor] Multi-session created: {session_id} for {candidate_id}")
+        
+        return success_response("Sessions created for all active candidates", {
+            "count": len(created_sessions),
+            "sessions": created_sessions
+        })
+    
+    except Exception as exc:
+        logger.exception(f"[LiveProctor] Error creating multi-sessions: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/live/all-sessions/{assessment_id}")
+async def get_all_sessions(
+    assessment_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """
+    Get all active proctoring sessions for an assessment.
+    Used by the multi-proctor dashboard to display all candidate streams.
+    """
+    try:
+        sessions = await db.proctor_sessions.find({
+            "assessmentId": assessment_id,
+            "status": {"$in": ["pending", "offer_sent", "active"]},
+        }).to_list(length=100)
+        
+        # Convert ObjectId to string
+        for session in sessions:
+            session["_id"] = str(session["_id"])
+        
+        return success_response("Sessions retrieved", {
+            "count": len(sessions),
+            "sessions": sessions
+        })
+    
+    except Exception as exc:
+        logger.exception(f"[LiveProctor] Error getting all sessions: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post("/record")
 async def record_proctor_event(
     payload: ProctorEventIn,
