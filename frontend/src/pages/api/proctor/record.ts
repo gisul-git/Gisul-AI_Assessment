@@ -21,6 +21,10 @@ const VALID_EVENT_TYPES = new Set([
   "CAMERA_ERROR",
   "PRECHECK_WARNING",
   "REFERENCE_PHOTO_CAPTURED",
+  // Live human proctoring events
+  "PROCTOR_SESSION_STARTED",
+  "PROCTOR_SESSION_VIEWING",
+  "PROCTOR_SESSION_ENDED",
 ]);
 
 interface ViolationPayload {

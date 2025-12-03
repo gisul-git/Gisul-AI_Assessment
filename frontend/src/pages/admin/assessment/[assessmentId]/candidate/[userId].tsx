@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/router";
 import { GetServerSideProps } from "next";
+import { useSession } from "next-auth/react";
 import { requireAuth } from "../../../../../lib/auth";
 import Link from "next/link";
 import axios from "axios";
 import ProctorSummaryCard from "../../../../../components/admin/ProctorSummaryCard";
 import { useProctorPolling, EVENT_TYPE_LABELS, type ProctorLog } from "../../../../../hooks/useProctorPolling";
+import { HumanProctorPanel } from "../../../../../components/proctor";
 
 interface CandidateData {
   email: string;
@@ -81,6 +83,7 @@ interface SectionData {
 export default function CandidateProctorPage() {
   const router = useRouter();
   const { assessmentId, userId } = router.query;
+  const { data: session } = useSession();
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +95,7 @@ export default function CandidateProctorPage() {
   const [loadingAnswerLogs, setLoadingAnswerLogs] = useState(false);
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<ProctorLog | null>(null);
+  const [showHumanProctor, setShowHumanProctor] = useState(false);
 
   // Use polling hook for proctoring data
   const {
@@ -581,6 +585,43 @@ export default function CandidateProctorPage() {
                 Updated: {lastUpdated.toLocaleTimeString()}
               </span>
             )}
+            {/* Human Proctoring Button */}
+            <button
+              type="button"
+              onClick={() => setShowHumanProctor(true)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.375rem",
+                backgroundColor: "#fef3c7",
+                color: "#d97706",
+                border: "1px solid #fcd34d",
+                borderRadius: "0.5rem",
+                padding: "0.5rem 0.875rem",
+                fontSize: "0.8125rem",
+                fontWeight: 600,
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+              onMouseOver={(e) => {
+                e.currentTarget.style.backgroundColor = "#fde68a";
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.backgroundColor = "#fef3c7";
+              }}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              Human Proctoring
+            </button>
             {/* Refresh Button */}
             <button
               type="button"
@@ -1219,6 +1260,16 @@ export default function CandidateProctorPage() {
           </div>
         </div>
       )}
+
+      {/* Human Proctoring Panel */}
+      <HumanProctorPanel
+        isOpen={showHumanProctor}
+        onClose={() => setShowHumanProctor(false)}
+        assessmentId={(assessmentId as string) || ""}
+        candidateId={(userId as string) || ""}
+        candidateName={candidateData?.name || candidateData?.email}
+        adminId={session?.user?.email || "admin"}
+      />
     </div>
   );
 }

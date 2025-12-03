@@ -11,7 +11,8 @@ import { useRouter } from "next/router";
 import axios from "axios";
 import { useProctor, type ProctorViolation } from "@/hooks/useProctor";
 import { useCameraProctor, type CameraProctorViolation } from "@/hooks/useCameraProctor";
-import { ProctorToast, FullscreenWarningBanner, ProctorDebugPanel } from "@/components/proctor";
+import { useLiveProctor } from "@/hooks/useLiveProctor";
+import { ProctorToast, FullscreenWarningBanner, ProctorDebugPanel, LiveProctorConsent } from "@/components/proctor";
 
 interface Question {
   questionText: string;
@@ -139,6 +140,30 @@ export default function CandidateAssessmentPage() {
       });
     },
     enabled: cameraProctorEnabled,
+    debugMode,
+  });
+
+  // Live proctoring hook for human proctoring (admin watching candidate)
+  const {
+    isStreaming: isLiveStreaming,
+    sessionId: liveSessionId,
+    connectionState: liveConnectionState,
+    showConsentPopup: showLiveProctorConsent,
+    startStreaming: startLiveStreaming,
+    stopStreaming: stopLiveStreaming,
+    declineConsent: declineLiveConsent,
+  } = useLiveProctor({
+    assessmentId: (id as string) || "",
+    candidateId: candidateEmail || "",
+    onSessionStart: () => {
+      console.log("[LiveProctor] Session started - admin is watching");
+    },
+    onSessionEnd: () => {
+      console.log("[LiveProctor] Session ended");
+    },
+    onError: (error) => {
+      console.error("[LiveProctor] Error:", error);
+    },
     debugMode,
   });
 
@@ -1407,6 +1432,46 @@ export default function CandidateAssessmentPage() {
         onRequestFullscreen={requestFullscreen}
         onExitFullscreen={exitFullscreen}
       />
+
+      {/* Live Proctoring Consent - shown when admin wants to watch */}
+      <LiveProctorConsent
+        isVisible={showLiveProctorConsent}
+        onAccept={startLiveStreaming}
+        onDecline={declineLiveConsent}
+      />
+
+      {/* Live Streaming Indicator */}
+      {isLiveStreaming && (
+        <div
+          style={{
+            position: "fixed",
+            top: "1rem",
+            right: "1rem",
+            backgroundColor: "#dc2626",
+            color: "white",
+            padding: "0.5rem 1rem",
+            borderRadius: "9999px",
+            fontSize: "0.75rem",
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            zIndex: 9998,
+            boxShadow: "0 4px 6px rgba(0, 0, 0, 0.2)",
+          }}
+        >
+          <span
+            style={{
+              width: "8px",
+              height: "8px",
+              backgroundColor: "white",
+              borderRadius: "50%",
+              animation: "pulse 1.5s infinite",
+            }}
+          />
+          LIVE - Proctor Watching
+        </div>
+      )}
     </div>
   );
 }

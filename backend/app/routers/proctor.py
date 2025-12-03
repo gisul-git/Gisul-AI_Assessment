@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import BaseModel
 
 from ..db.mongo import get_db
 from ..schemas.proctor import ProctorEventIn, ProctorSummaryOut, EVENT_TYPE_LABELS
@@ -14,6 +16,270 @@ from ..utils.responses import success_response
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/proctor", tags=["proctor"])
+
+
+# ============================================================================
+# WebRTC Signalling Models
+# ============================================================================
+
+class CreateSessionRequest(BaseModel):
+    assessmentId: str
+    candidateId: str  # userId/email of candidate
+    adminId: str  # userId of admin creating session
+
+
+class SessionResponse(BaseModel):
+    sessionId: str
+    status: str
+
+
+class SDPRequest(BaseModel):
+    sessionId: str
+    sdp: str
+    sdpType: str  # "offer" or "answer"
+    sender: str  # "candidate" or "admin"
+
+
+class ICECandidateRequest(BaseModel):
+    sessionId: str
+    candidate: str
+    sdpMid: Optional[str] = None
+    sdpMLineIndex: Optional[int] = None
+    sender: str  # "candidate" or "admin"
+
+
+# ============================================================================
+# WebRTC Live Proctoring Endpoints
+# ============================================================================
+
+@router.post("/live/create-session")
+async def create_live_session(
+    request: CreateSessionRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """
+    Create a new live proctoring session for WebRTC signalling.
+    Called by admin when they want to start watching a candidate.
+    """
+    try:
+        session_id = str(uuid.uuid4())
+        
+        session = {
+            "sessionId": session_id,
+            "assessmentId": request.assessmentId,
+            "candidateId": request.candidateId,
+            "adminId": request.adminId,
+            "status": "pending",  # pending -> active -> ended
+            "offer": None,
+            "answer": None,
+            "candidateICE": [],
+            "adminICE": [],
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        
+        await db.proctor_sessions.insert_one(session)
+        
+        logger.info(f"[LiveProctor] Session created: {session_id} for candidate {request.candidateId}")
+        
+        return success_response("Session created", {"sessionId": session_id, "status": "pending"})
+    
+    except Exception as exc:
+        logger.exception(f"[LiveProctor] Error creating session: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/live/session/{session_id}")
+async def get_live_session(
+    session_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Get current session state including SDP and ICE candidates."""
+    try:
+        session = await db.proctor_sessions.find_one({"sessionId": session_id})
+        
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        session["_id"] = str(session["_id"])
+        
+        return success_response("Session fetched", session)
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"[LiveProctor] Error fetching session: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/live/offer")
+async def post_offer(
+    request: SDPRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """
+    Post WebRTC offer SDP.
+    Candidate sends offer when starting to stream.
+    """
+    try:
+        result = await db.proctor_sessions.update_one(
+            {"sessionId": request.sessionId},
+            {
+                "$set": {
+                    "offer": {"sdp": request.sdp, "type": request.sdpType, "sender": request.sender},
+                    "status": "offer_sent",
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            }
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        logger.info(f"[LiveProctor] Offer received for session {request.sessionId}")
+        
+        return success_response("Offer saved", {"sessionId": request.sessionId})
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"[LiveProctor] Error saving offer: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/live/answer")
+async def post_answer(
+    request: SDPRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """
+    Post WebRTC answer SDP.
+    Admin sends answer after receiving candidate's offer.
+    """
+    try:
+        result = await db.proctor_sessions.update_one(
+            {"sessionId": request.sessionId},
+            {
+                "$set": {
+                    "answer": {"sdp": request.sdp, "type": request.sdpType, "sender": request.sender},
+                    "status": "active",
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            }
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        logger.info(f"[LiveProctor] Answer received for session {request.sessionId}")
+        
+        return success_response("Answer saved", {"sessionId": request.sessionId})
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"[LiveProctor] Error saving answer: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/live/ice")
+async def post_ice_candidate(
+    request: ICECandidateRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """
+    Post ICE candidate for WebRTC connection.
+    Both candidate and admin send ICE candidates.
+    """
+    try:
+        ice_field = "candidateICE" if request.sender == "candidate" else "adminICE"
+        
+        ice_candidate = {
+            "candidate": request.candidate,
+            "sdpMid": request.sdpMid,
+            "sdpMLineIndex": request.sdpMLineIndex,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        
+        result = await db.proctor_sessions.update_one(
+            {"sessionId": request.sessionId},
+            {
+                "$push": {ice_field: ice_candidate},
+                "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()},
+            }
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        return success_response("ICE candidate saved", {"sessionId": request.sessionId})
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"[LiveProctor] Error saving ICE candidate: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/live/end-session/{session_id}")
+async def end_live_session(
+    session_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """End a live proctoring session."""
+    try:
+        result = await db.proctor_sessions.update_one(
+            {"sessionId": session_id},
+            {
+                "$set": {
+                    "status": "ended",
+                    "endedAt": datetime.now(timezone.utc).isoformat(),
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            }
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        logger.info(f"[LiveProctor] Session ended: {session_id}")
+        
+        return success_response("Session ended", {"sessionId": session_id, "status": "ended"})
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"[LiveProctor] Error ending session: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/live/pending/{assessment_id}/{candidate_id}")
+async def get_pending_session(
+    assessment_id: str,
+    candidate_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """
+    Check if there's a pending live proctoring session for a candidate.
+    Candidate polls this to know when admin wants to watch them.
+    """
+    try:
+        session = await db.proctor_sessions.find_one({
+            "assessmentId": assessment_id,
+            "candidateId": candidate_id,
+            "status": {"$in": ["pending", "offer_sent", "active"]},
+        })
+        
+        if not session:
+            return success_response("No active session", {"hasSession": False})
+        
+        session["_id"] = str(session["_id"])
+        
+        return success_response("Session found", {"hasSession": True, "session": session})
+    
+    except Exception as exc:
+        logger.exception(f"[LiveProctor] Error checking pending session: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/record")

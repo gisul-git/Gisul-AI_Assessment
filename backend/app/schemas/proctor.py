@@ -22,6 +22,15 @@ PROCTOR_EVENT_TYPES = {
     "GAZE_AWAY",
     "MULTI_FACE",
     "SPOOF_DETECTED",
+    "FACE_MISMATCH",
+    "CAMERA_DENIED",
+    "CAMERA_ERROR",
+    "PRECHECK_WARNING",
+    "REFERENCE_PHOTO_CAPTURED",
+    # Live human proctoring events
+    "PROCTOR_SESSION_STARTED",
+    "PROCTOR_SESSION_VIEWING",
+    "PROCTOR_SESSION_ENDED",
 }
 
 # Human-readable labels for event types
@@ -40,6 +49,15 @@ EVENT_TYPE_LABELS: Dict[str, str] = {
     "GAZE_AWAY": "Gaze away detected",
     "MULTI_FACE": "Multiple faces detected",
     "SPOOF_DETECTED": "Spoof attempt detected",
+    "FACE_MISMATCH": "Face doesn't match verified identity",
+    "CAMERA_DENIED": "Camera access was denied",
+    "CAMERA_ERROR": "Camera error occurred",
+    "PRECHECK_WARNING": "Pre-check warning",
+    "REFERENCE_PHOTO_CAPTURED": "Reference photo captured",
+    # Live human proctoring events
+    "PROCTOR_SESSION_STARTED": "Human proctor session started",
+    "PROCTOR_SESSION_VIEWING": "Proctor is viewing candidate",
+    "PROCTOR_SESSION_ENDED": "Human proctor session ended",
 }
 
 
