@@ -346,16 +346,22 @@ export function useLiveProctor({
           return;
         }
         
-        // Only process pending sessions
-        if (session.status === "pending") {
-          log("Pending session found!", session);
+        // Process sessions that need streaming (pending or offer_sent from previous attempt)
+        if (session.status === "pending" || session.status === "offer_sent") {
+          log("Session found, starting streaming...", { sessionId: session.sessionId, status: session.status });
           processedSessionsRef.current.add(session.sessionId);
           pendingSessionRef.current = session;
           
-          // Auto-start streaming immediately without asking - mandatory feature
-          log("Auto-starting streaming for human proctoring...");
+          // Set connecting flag BEFORE async operation
           isConnectingRef.current = true;
-          startStreamingWithSession(session);
+          
+          // Auto-start streaming immediately without asking - mandatory feature
+          try {
+            await startStreamingWithSession(session);
+          } catch (err) {
+            log("Error in startStreamingWithSession", err);
+            isConnectingRef.current = false;
+          }
         }
       }
     } catch (err) {
@@ -363,25 +369,31 @@ export function useLiveProctor({
     }
   }, [assessmentId, candidateId, log, startStreamingWithSession]);
 
-  // Start polling for admin sessions
+  // Start polling for admin sessions - use ref to avoid re-creating interval
+  const checkForPendingSessionRef = useRef(checkForPendingSession);
+  checkForPendingSessionRef.current = checkForPendingSession;
+  
   useEffect(() => {
     if (!assessmentId || !candidateId) {
-      log("Not polling - missing assessmentId or candidateId", { assessmentId, candidateId });
       return;
     }
     
     log("Starting to poll for human proctor sessions...", { assessmentId, candidateId });
     
+    // Use ref to always call latest version without changing interval
+    const poll = () => checkForPendingSessionRef.current();
+    
     // Poll every 3 seconds
-    pollIntervalRef.current = setInterval(checkForPendingSession, 3000);
-    checkForPendingSession(); // Initial check
+    pollIntervalRef.current = setInterval(poll, 3000);
+    poll(); // Initial check
     
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
       }
     };
-  }, [assessmentId, candidateId, checkForPendingSession]);
+  }, [assessmentId, candidateId, log]); // Remove checkForPendingSession from deps
 
   // Public stop function
   const stopStreaming = useCallback(() => {

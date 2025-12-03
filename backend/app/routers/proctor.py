@@ -60,8 +60,25 @@ async def create_live_session(
     """
     Create a new live proctoring session for WebRTC signalling.
     Called by admin when they want to start watching a candidate.
+    Automatically ends any existing pending/active sessions for this candidate.
     """
     try:
+        # End any existing pending/active sessions for this candidate first
+        await db.proctor_sessions.update_many(
+            {
+                "assessmentId": request.assessmentId,
+                "candidateId": request.candidateId,
+                "status": {"$in": ["pending", "active", "offer_sent"]},
+            },
+            {
+                "$set": {
+                    "status": "ended",
+                    "endedAt": datetime.now(timezone.utc).isoformat(),
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            }
+        )
+        
         session_id = str(uuid.uuid4())
         
         session = {
