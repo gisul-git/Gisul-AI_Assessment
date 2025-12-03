@@ -43,6 +43,10 @@ export function CameraProctorModal({
   const [screenShareGranted, setScreenShareGranted] = useState(false);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [isStarting, setIsStarting] = useState(false);
+  
+  // Use REF to track starting state - refs update SYNCHRONOUSLY unlike state!
+  // This prevents cleanup from running when we're navigating to the take page
+  const isStartingRef = useRef(false);
 
   // Auto-start camera when modal opens
   useEffect(() => {
@@ -51,8 +55,8 @@ export function CameraProctorModal({
     }
     
     // Only cleanup when modal closes WITHOUT starting assessment
-    // If isStarting is true, we're navigating to take page and streams should persist
-    if (!isOpen && !isStarting) {
+    // Use REF (not state) because refs update synchronously!
+    if (!isOpen && !isStartingRef.current) {
       if (previewStreamRef.current) {
         previewStreamRef.current.getTracks().forEach(track => track.stop());
         previewStreamRef.current = null;
@@ -68,7 +72,7 @@ export function CameraProctorModal({
         setScreenStream(null);
       }
     }
-  }, [isOpen, isStarting]);
+  }, [isOpen]); // Removed isStarting - using ref instead for synchronous check
 
   // Focus the accept button when modal opens and consent is checked
   useEffect(() => {
@@ -220,6 +224,9 @@ export function CameraProctorModal({
   const handleStartAssessment = async () => {
     if (!capturedPhoto || !screenStream || !previewStreamRef.current) return;
     
+    // Set ref FIRST - this is SYNCHRONOUS and prevents cleanup from running!
+    isStartingRef.current = true;
+    
     setIsStarting(true);
     setLocalError(null);
     
@@ -230,10 +237,15 @@ export function CameraProctorModal({
       
       if (!success) {
         setLocalError("Failed to start. Please try again.");
+        // Reset ref only on failure
+        isStartingRef.current = false;
       }
+      // On success: Don't reset ref - streams should persist on take page
       // Don't stop streams here - they'll be used on the take page
     } catch (error) {
       setLocalError("An error occurred. Please try again.");
+      // Reset ref on error
+      isStartingRef.current = false;
     } finally {
       setIsStarting(false);
     }
