@@ -45,12 +45,13 @@ export function HumanProctorPanel({
     debugMode: true,
   });
 
-  // Start session when panel opens
+  // Start session when panel opens - also reconnect if already connected (refresh)
   useEffect(() => {
-    if (isOpen && !isConnecting && !isConnected) {
+    if (isOpen && !isConnecting) {
+      // Always try to connect (will find existing session or create new one)
       createSession(assessmentId, candidateId, adminId);
     }
-  }, [isOpen, assessmentId, candidateId, adminId, createSession, isConnecting, isConnected]);
+  }, [isOpen, assessmentId, candidateId, adminId, createSession, isConnecting]);
 
   // Attach streams to video elements
   useEffect(() => {
@@ -65,9 +66,11 @@ export function HumanProctorPanel({
     }
   }, [screenStream]);
 
-  // Handle close
+  // Handle close - only close panel, don't disconnect (streams should continue)
   const handleClose = () => {
-    disconnect();
+    // Don't call disconnect() - just close the panel
+    // Streams will continue running on candidate side
+    // Admin can reopen panel anytime to view again
     onClose();
   };
 
@@ -132,12 +135,12 @@ export function HumanProctorPanel({
             </button>
             <button
               onClick={handleClose}
-              className="rounded-lg bg-red-500/20 px-3 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-500/30 flex items-center gap-2"
+              className="rounded-lg bg-slate-700 px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-600 flex items-center gap-2"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
-              End Session
+              Close
             </button>
           </div>
         </div>
@@ -239,13 +242,12 @@ export function HumanProctorPanel({
           {/* Instructions */}
           {!isConnected && (
             <div className="mt-4 rounded-xl bg-slate-800/50 p-4">
-              <h3 className="text-sm font-semibold text-slate-200 mb-2">How it works:</h3>
-              <ol className="text-xs text-slate-400 space-y-1 list-decimal list-inside">
-                <li>A request has been sent to the candidate</li>
-                <li>The candidate will see a consent popup</li>
-                <li>Once they accept, you&apos;ll see their webcam and screen</li>
-                <li>The session will auto-refresh if connection is lost</li>
-              </ol>
+              <h3 className="text-sm font-semibold text-slate-200 mb-2">Connecting...</h3>
+              <p className="text-xs text-slate-400">
+                {isConnecting 
+                  ? "Connecting to candidate's stream. The candidate is already streaming from the start of their assessment."
+                  : "Waiting for candidate's stream. If the candidate has started the assessment, their stream should appear shortly."}
+              </p>
             </div>
           )}
         </div>

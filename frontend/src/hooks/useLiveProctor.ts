@@ -380,6 +380,72 @@ export function useLiveProctor({
     }
   }, [assessmentId, candidateId, log, startStreamingWithSession]);
 
+  // Create session immediately when assessment starts (if one doesn't exist)
+  const createInitialSession = useCallback(async () => {
+    if (!assessmentId || !candidateId || isStreamingRef.current || isConnectingRef.current) {
+      return;
+    }
+    
+    try {
+      log("Checking for existing session before creating initial session...");
+      
+      // First check if a session already exists (maybe admin created it first)
+      const pendingRes = await fetch(
+        `${API_URL}/api/proctor/live/pending/${assessmentId}/${encodeURIComponent(candidateId)}`
+      );
+      const pendingData = await pendingRes.json();
+      
+      if (pendingData.success && pendingData.data.hasSession) {
+        const existingSession = pendingData.data.session as LiveProctorSession;
+        log("Found existing session, will use it instead of creating new one", existingSession.sessionId);
+        
+        // Don't create a new session - the polling will pick up the existing one
+        return;
+      }
+      
+      // No existing session, create one
+      log("No existing session found, creating initial session for assessment start...");
+      
+      // Create session with a placeholder adminId (will be updated when admin connects)
+      const res = await fetch(`${API_URL}/api/proctor/live/create-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assessmentId,
+          candidateId,
+          adminId: "system", // Placeholder - will be updated when admin connects
+        }),
+      });
+      
+      const data = await res.json();
+      
+      if (data.success) {
+        const sessionId = data.data.sessionId;
+        log("Initial session created", sessionId);
+        
+        // Start streaming immediately to this session
+        const session: LiveProctorSession = {
+          sessionId,
+          assessmentId,
+          candidateId,
+          adminId: "system",
+          status: "pending",
+          candidateICE: [],
+          adminICE: [],
+        };
+        
+        processedSessionsRef.current.add(sessionId);
+        pendingSessionRef.current = session;
+        isConnectingRef.current = true;
+        
+        await startStreamingWithSession(session);
+      }
+    } catch (err) {
+      log("Error creating initial session", err);
+      isConnectingRef.current = false;
+    }
+  }, [assessmentId, candidateId, log, startStreamingWithSession]);
+
   // Start polling for admin sessions - use ref to avoid re-creating interval
   const checkForPendingSessionRef = useRef(checkForPendingSession);
   checkForPendingSessionRef.current = checkForPendingSession;
@@ -389,12 +455,15 @@ export function useLiveProctor({
       return;
     }
     
-    log("Starting to poll for human proctor sessions...", { assessmentId, candidateId });
+    log("Assessment started - creating initial session and starting to poll...", { assessmentId, candidateId });
+    
+    // Create session immediately when assessment starts
+    createInitialSession();
     
     // Use ref to always call latest version without changing interval
     const poll = () => checkForPendingSessionRef.current();
     
-    // Poll every 3 seconds
+    // Poll every 3 seconds for new admin connections
     pollIntervalRef.current = setInterval(poll, 3000);
     poll(); // Initial check
     
@@ -404,7 +473,7 @@ export function useLiveProctor({
         pollIntervalRef.current = null;
       }
     };
-  }, [assessmentId, candidateId, log]); // Remove checkForPendingSession from deps
+  }, [assessmentId, candidateId, log, createInitialSession]); // Add createInitialSession to deps
 
   // Public stop function
   const stopStreaming = useCallback(() => {

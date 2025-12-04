@@ -251,7 +251,7 @@ export function useMultiLiveProctorAdmin({
     pollForOffer(); // Initial check
   }, [log, updateCandidateStream]);
 
-  // Start monitoring all candidates
+  // Start monitoring all candidates - uses existing sessions
   const startMonitoring = useCallback(async () => {
     if (!assessmentId || !adminId) return;
 
@@ -259,41 +259,39 @@ export function useMultiLiveProctorAdmin({
     log("Starting multi-candidate monitoring...");
 
     try {
-      // Create sessions for all active candidates
-      const createRes = await fetch(`${API_URL}/api/proctor/live/create-multi-session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          assessmentId,
-          adminId,
-        }),
-      });
-      const createData = await createRes.json();
+      // Fetch existing active sessions (created when candidates started assessment)
+      const res = await fetch(`${API_URL}/api/proctor/live/all-sessions/${assessmentId}`);
+      const data = await res.json();
 
-      if (!createData.success) {
-        throw new Error(createData.message || "Failed to create sessions");
+      if (!data.success) {
+        throw new Error(data.message || "Failed to fetch sessions");
       }
 
-      log(`Created ${createData.data.count} sessions`);
-      setActiveCandidates(createData.data.sessions);
+      const sessions = (data.data.sessions || []) as CandidateSession[];
+      log(`Found ${sessions.length} existing sessions`);
 
-      // Connect to each candidate
-      for (const session of createData.data.sessions) {
+      // Sessions with adminId="system" are fine - they were created when candidate started
+      // We can connect to them directly without updating adminId
+
+      setActiveCandidates(sessions);
+
+      // Connect to each candidate's existing session
+      for (const session of sessions) {
         await connectToCandidate(session);
       }
 
       // Start polling for new candidates
       mainPollIntervalRef.current = setInterval(async () => {
         try {
-          const res = await fetch(`${API_URL}/api/proctor/live/all-sessions/${assessmentId}`);
-          const data = await res.json();
+          const pollRes = await fetch(`${API_URL}/api/proctor/live/all-sessions/${assessmentId}`);
+          const pollData = await pollRes.json();
           
-          if (data.success && data.data.sessions) {
-            const sessions = data.data.sessions as CandidateSession[];
-            setActiveCandidates(sessions);
+          if (pollData.success && pollData.data.sessions) {
+            const newSessions = pollData.data.sessions as CandidateSession[];
+            setActiveCandidates(newSessions);
             
             // Connect to any new candidates
-            for (const session of sessions) {
+            for (const session of newSessions) {
               if (!peerConnectionsRef.current.has(session.sessionId)) {
                 await connectToCandidate(session);
               }

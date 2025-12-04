@@ -53,36 +53,58 @@ export function useLiveProctorAdmin({
     [debugMode]
   );
 
-  // Create a new session and wait for candidate to connect
+  // Find existing session or create new one
   const createSession = useCallback(
     async (assessmentId: string, candidateId: string, adminId: string) => {
       try {
         setIsConnecting(true);
-        log("Creating session...");
+        log("Looking for existing session...");
         
-        const res = await fetch(`${API_URL}/api/proctor/live/create-session`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ assessmentId, candidateId, adminId }),
-        });
+        // First, try to find existing session (created when candidate started assessment)
+        const allSessionsRes = await fetch(`${API_URL}/api/proctor/live/all-sessions/${assessmentId}`);
+        const allSessionsData = await allSessionsRes.json();
         
-        const data = await res.json();
-        
-        if (!data.success) {
-          throw new Error(data.message || "Failed to create session");
+        let existingSession: LiveProctorSession | null = null;
+        if (allSessionsData.success && allSessionsData.data.sessions) {
+          const sessions = allSessionsData.data.sessions as LiveProctorSession[];
+          existingSession = sessions.find(s => s.candidateId === candidateId) || null;
         }
         
-        const sessId = data.data.sessionId;
+        let sessId: string;
+        
+        if (existingSession) {
+          // Use existing session (created when candidate started assessment)
+          sessId = existingSession.sessionId;
+          log("Found existing session", sessId);
+          // Note: adminId might be "system" - that's fine, we can still connect
+        } else {
+          // Create new session (fallback - candidate might not have started yet)
+          log("No existing session found, creating new one...");
+          const createRes = await fetch(`${API_URL}/api/proctor/live/create-session`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ assessmentId, candidateId, adminId }),
+          });
+          
+          const createData = await createRes.json();
+          
+          if (!createData.success) {
+            throw new Error(createData.message || "Failed to create session");
+          }
+          
+          sessId = createData.data.sessionId;
+          log("New session created", sessId);
+        }
+        
         setSessionId(sessId);
-        log("Session created", sessId);
         
         // Start polling for candidate's offer
         startPollingForOffer(sessId, assessmentId, candidateId);
         
         return sessId;
       } catch (err) {
-        log("Error creating session", err);
-        onError?.(err instanceof Error ? err.message : "Failed to create session");
+        log("Error finding/creating session", err);
+        onError?.(err instanceof Error ? err.message : "Failed to find/create session");
         setIsConnecting(false);
         return null;
       }
