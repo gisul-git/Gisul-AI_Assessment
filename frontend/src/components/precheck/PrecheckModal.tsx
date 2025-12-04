@@ -121,16 +121,23 @@ export function PrecheckModal({
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
-  // Reset when modal opens
+  // Track if modal was previously open
+  const wasOpenRef = useRef(false);
+  
+  // Reset ONLY when modal first opens (not on every render)
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !wasOpenRef.current) {
+      // Modal just opened - reset to step 0
       setCurrentStep(0);
       setIsChecking(false);
-    } else {
+      wasOpenRef.current = true;
+    } else if (!isOpen && wasOpenRef.current) {
+      // Modal just closed - cleanup
       stopAllStreams();
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
+      wasOpenRef.current = false;
     }
   }, [isOpen, stopAllStreams]);
 
@@ -262,11 +269,11 @@ export function PrecheckModal({
 
   if (!isOpen) return null;
 
-  // Block if ANY extension is detected (not just high risk)
-  const isBlockedByExtensions = extensionScanResult?.hasAnyExtension ?? false;
+  // Only block if HARMFUL extension is detected (screen recorder, automation, remote desktop)
+  const hasHarmfulExtension = extensionScanResult?.hasHarmfulExtension ?? false;
   const canProceed = currentCheck?.status === "passed" && 
     (currentCheckType !== "microphone" || thresholdReached) &&
-    (currentCheckType !== "browser" || !isBlockedByExtensions);
+    (currentCheckType !== "browser" || !hasHarmfulExtension);
 
   return (
     <div
@@ -460,8 +467,8 @@ export function PrecheckModal({
                 </div>
               )}
 
-              {/* Extension Warnings - Block ANY extension */}
-              {extensionScanResult && extensionScanResult.extensions.length > 0 && (
+              {/* Extension Warnings - Only show for HARMFUL extensions */}
+              {extensionScanResult && hasHarmfulExtension && (
                 <div
                   style={{
                     padding: "1rem",
@@ -472,17 +479,19 @@ export function PrecheckModal({
                   }}
                 >
                   <p style={{ fontWeight: 600, marginBottom: "0.5rem", color: "#dc2626", margin: 0 }}>
-                    ⚠️ Browser Extensions Detected
+                    ⚠️ Harmful Extensions Detected
                   </p>
                   <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.25rem", fontSize: "0.875rem", color: "#dc2626" }}>
-                    {extensionScanResult.extensions.map((ext, i) => (
-                      <li key={i} style={{ marginBottom: "0.25rem" }}>
-                        {ext.description}
-                      </li>
-                    ))}
+                    {extensionScanResult.extensions
+                      .filter(ext => ext.category === "screen_recorder" || ext.category === "automation" || ext.category === "remote_desktop")
+                      .map((ext, i) => (
+                        <li key={i} style={{ marginBottom: "0.25rem" }}>
+                          {ext.description}
+                        </li>
+                      ))}
                   </ul>
                   <p style={{ marginTop: "0.75rem", marginBottom: "0.75rem", fontSize: "0.875rem", color: "#dc2626" }}>
-                    Please disable all browser extensions, then click &quot;Re-scan&quot; to continue.
+                    These extensions can interfere with the assessment. Please disable them and click &quot;Re-scan&quot;.
                   </p>
                   <button
                     onClick={async () => {

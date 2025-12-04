@@ -25,9 +25,10 @@ export interface DetectedExtension {
 
 export interface ExtensionScanResult {
   extensions: DetectedExtension[];
-  hasHighRisk: boolean;
+  hasHighRisk: boolean; // Screen recorders, automation, remote desktop
   hasMediumRisk: boolean;
-  hasAnyExtension: boolean; // Block if ANY extension detected
+  hasAnyExtension: boolean;
+  hasHarmfulExtension: boolean; // Only block if harmful extension detected
   scanTime: number;
 }
 
@@ -410,16 +411,22 @@ export function usePrecheckExtensions(): UsePrecheckExtensionsReturn {
       
       const scanTime = performance.now() - startTime;
       
+      // Harmful categories that should block the assessment
+      const harmfulCategories: ExtensionCategory[] = ["screen_recorder", "automation", "remote_desktop"];
+      
       const result: ExtensionScanResult = {
         extensions: uniqueExtensions,
         hasHighRisk: uniqueExtensions.some(
-          (e) => e.confidence === "high" && 
-          (e.category === "screen_recorder" || e.category === "automation" || e.category === "remote_desktop")
+          (e) => e.confidence === "high" && harmfulCategories.includes(e.category)
         ),
         hasMediumRisk: uniqueExtensions.some(
           (e) => e.confidence === "medium" || e.confidence === "high"
         ),
         hasAnyExtension: uniqueExtensions.length > 0,
+        // Only block if harmful extension is detected (screen recorder, automation, remote desktop)
+        hasHarmfulExtension: uniqueExtensions.some(
+          (e) => harmfulCategories.includes(e.category)
+        ),
         scanTime,
       };
       
