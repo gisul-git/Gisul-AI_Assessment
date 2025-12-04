@@ -63,6 +63,13 @@ export default function PrecheckPage() {
     runCheck,
     cameraStream,
     audioLevel,
+    isRecording,
+    recordedAudio,
+    audioDbLevel,
+    thresholdReached,
+    startRecording,
+    stopRecording,
+    playRecording,
     stopAllStreams,
     logs,
     clearLogs,
@@ -445,18 +452,20 @@ export default function PrecheckPage() {
                     <button
                       type="button"
                       onClick={handleNextCheck}
+                      disabled={type === "microphone" && !thresholdReached}
                       style={{
                         padding: "0.5rem 1rem",
-                        backgroundColor: "#10b981",
+                        backgroundColor: type === "microphone" && !thresholdReached ? "#94a3b8" : "#10b981",
                         color: "#ffffff",
                         border: "none",
                         borderRadius: "0.5rem",
                         fontSize: "0.875rem",
                         fontWeight: 500,
-                        cursor: "pointer",
+                        cursor: type === "microphone" && !thresholdReached ? "not-allowed" : "pointer",
                         display: "flex",
                         alignItems: "center",
                         gap: "0.5rem",
+                        opacity: type === "microphone" && !thresholdReached ? 0.6 : 1,
                       }}
                     >
                       Next
@@ -490,23 +499,155 @@ export default function PrecheckPage() {
                   </div>
                 )}
                 
-                {/* Audio Level */}
+                {/* Microphone Device Selection */}
+                {type === "microphone" && isCurrentStep && microphones.length > 0 && (
+                  <div style={{ marginTop: "1rem" }}>
+                    <label style={{ fontSize: "0.75rem", color: "#64748b", display: "block", marginBottom: "0.5rem" }}>
+                      Select Microphone:
+                    </label>
+                    <select
+                      value={selectedMicrophone || ""}
+                      onChange={(e) => setSelectedMicrophone(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "0.5rem",
+                        borderRadius: "0.375rem",
+                        border: "1px solid #e2e8f0",
+                        fontSize: "0.875rem",
+                        backgroundColor: "#ffffff",
+                      }}
+                    >
+                      {microphones.map((mic) => (
+                        <option key={mic.deviceId} value={mic.deviceId}>
+                          {mic.label || `Microphone ${mic.deviceId.slice(0, 8)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                
+                {/* Microphone Recording Controls */}
                 {type === "microphone" && isCurrentStep && checks.microphone?.status === "passed" && (
                   <div style={{ marginTop: "1rem" }}>
-                    <p style={{ fontSize: "0.75rem", color: "#64748b", marginBottom: "0.5rem" }}>
-                      Speak to test your microphone:
+                    <p style={{ fontSize: "0.75rem", color: "#64748b", marginBottom: "0.75rem" }}>
+                      Test your microphone by recording:
                     </p>
-                    <div style={{ height: "8px", backgroundColor: "#e2e8f0", borderRadius: "4px", overflow: "hidden" }}>
+                    
+                    {/* Recording Button */}
+                    <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                      {!isRecording ? (
+                        <button
+                          type="button"
+                          onClick={startRecording}
+                          style={{
+                            padding: "0.5rem 1rem",
+                            backgroundColor: "#6953a3",
+                            color: "#ffffff",
+                            border: "none",
+                            borderRadius: "0.375rem",
+                            fontSize: "0.875rem",
+                            fontWeight: 500,
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.5rem",
+                          }}
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <circle cx="12" cy="12" r="3" fill="currentColor" />
+                          </svg>
+                          Start Recording
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={stopRecording}
+                          style={{
+                            padding: "0.5rem 1rem",
+                            backgroundColor: "#ef4444",
+                            color: "#ffffff",
+                            border: "none",
+                            borderRadius: "0.375rem",
+                            fontSize: "0.875rem",
+                            fontWeight: 500,
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.5rem",
+                          }}
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <rect x="6" y="6" width="12" height="12" rx="2" />
+                          </svg>
+                          Recording... (2s)
+                        </button>
+                      )}
+                      
+                      {recordedAudio && (
+                        <button
+                          type="button"
+                          onClick={playRecording}
+                          style={{
+                            padding: "0.5rem 1rem",
+                            backgroundColor: "#10b981",
+                            color: "#ffffff",
+                            border: "none",
+                            borderRadius: "0.375rem",
+                            fontSize: "0.875rem",
+                            fontWeight: 500,
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.5rem",
+                          }}
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <polygon points="5 3 19 12 5 21 5 3" />
+                          </svg>
+                          Play Recording
+                        </button>
+                      )}
+                    </div>
+                    
+                    {/* Audio Level Display */}
+                    {isRecording && (
+                      <div style={{ marginBottom: "0.75rem" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.25rem" }}>
+                          <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Audio Level:</span>
+                          <span style={{ fontSize: "0.75rem", color: thresholdReached ? "#10b981" : "#64748b", fontWeight: thresholdReached ? 600 : 400 }}>
+                            {audioDbLevel.toFixed(1)} dB {thresholdReached ? "✓ Threshold Reached" : "(Target: -40 dB)"}
+                          </span>
+                        </div>
+                        <div style={{ height: "8px", backgroundColor: "#e2e8f0", borderRadius: "4px", overflow: "hidden" }}>
+                          <div
+                            style={{
+                              height: "100%",
+                              width: `${Math.max(0, Math.min(100, ((audioDbLevel + 60) / 60) * 100))}%`,
+                              backgroundColor: thresholdReached ? "#10b981" : audioDbLevel > -50 ? "#eab308" : "#94a3b8",
+                              borderRadius: "4px",
+                              transition: "width 0.1s ease",
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Threshold Status */}
+                    {thresholdReached && !isRecording && (
                       <div
                         style={{
-                          height: "100%",
-                          width: `${audioLevel * 100}%`,
-                          backgroundColor: audioLevel > 0.5 ? "#10b981" : audioLevel > 0.2 ? "#eab308" : "#94a3b8",
-                          borderRadius: "4px",
-                          transition: "width 0.1s ease",
+                          padding: "0.75rem",
+                          backgroundColor: "#ecfdf5",
+                          border: "1px solid #86efac",
+                          borderRadius: "0.375rem",
+                          fontSize: "0.75rem",
+                          color: "#065f46",
                         }}
-                      />
-                    </div>
+                      >
+                        ✓ Audio threshold reached! You can proceed to the next step.
+                      </div>
+                    )}
                   </div>
                 )}
                 

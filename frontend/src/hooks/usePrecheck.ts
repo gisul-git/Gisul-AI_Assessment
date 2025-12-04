@@ -98,6 +98,15 @@ interface UsePrecheckReturn {
   microphoneStream: MediaStream | null;
   audioLevel: number;
   
+  // Microphone recording
+  isRecording: boolean;
+  recordedAudio: Blob | null;
+  audioDbLevel: number;
+  thresholdReached: boolean;
+  startRecording: () => Promise<void>;
+  stopRecording: () => void;
+  playRecording: () => void;
+  
   // Cleanup
   stopAllStreams: () => void;
   
@@ -348,6 +357,13 @@ export function usePrecheck({
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [microphoneStream, setMicrophoneStream] = useState<MediaStream | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedAudio, setRecordedAudio] = useState<Blob | null>(null);
+  const [audioDbLevel, setAudioDbLevel] = useState(0);
+  const [thresholdReached, setThresholdReached] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioPlaybackRef = useRef<HTMLAudioElement | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [browserInfo] = useState<BrowserInfo>(() => detectBrowser());
   
@@ -531,7 +547,7 @@ export function usePrecheck({
   
   const checkMicrophone = useCallback(async (): Promise<CheckResult> => {
     log("Starting microphone check...");
-    updateCheck("microphone", { status: "running", message: "Checking microphone..." });
+    updateCheck("microphone", { status: "running", message: "Initializing microphone..." });
     
     try {
       // Stop existing stream
@@ -566,43 +582,15 @@ export function usePrecheck({
       source.connect(analyser);
       analyserRef.current = analyser;
       
-      // Measure audio levels for 2 seconds
-      let maxLevel = 0;
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      
-      const measureAudio = () => {
-        analyser.getByteFrequencyData(dataArray);
-        const level = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
-        const normalizedLevel = Math.min(level / 128, 1);
-        setAudioLevel(normalizedLevel);
-        maxLevel = Math.max(maxLevel, normalizedLevel);
-      };
-      
-      // Monitor audio level continuously
-      const animateLevel = () => {
-        measureAudio();
-        audioAnimationRef.current = requestAnimationFrame(animateLevel);
-      };
-      animateLevel();
-      
-      // Wait 2 seconds to measure
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      
-      const hasAudio = maxLevel > 0.01; // Very low threshold
-      
-      log(`Microphone check ${hasAudio ? "passed" : "needs verification"}: ${track.label}, max level: ${maxLevel.toFixed(3)}`);
+      log(`Microphone initialized: ${track.label}`);
       
       const result: CheckResult = {
         type: "microphone",
-        status: "passed", // Pass even if no audio detected (they may not be speaking)
-        message: hasAudio 
-          ? `Microphone working: ${track.label}`
-          : `Microphone connected: ${track.label} (try speaking to verify)`,
+        status: "passed",
+        message: `Microphone ready: ${track.label}. Please test by recording.`,
         details: {
           deviceId: track.getSettings().deviceId,
           label: track.label,
-          maxLevel: maxLevel.toFixed(3),
-          hasAudio,
         },
         lastChecked: new Date(),
       };
@@ -630,6 +618,115 @@ export function usePrecheck({
       return result;
     }
   }, [selectedMicrophone, microphoneStream, enumerateDevices, updateCheck, log]);
+  
+  // Start recording microphone for 2 seconds
+  const startRecording = useCallback(async (): Promise<void> => {
+    if (!microphoneStream) return;
+    
+    try {
+      setThresholdReached(false);
+      setRecordedAudio(null);
+      audioChunksRef.current = [];
+      
+      const mediaRecorder = new MediaRecorder(microphoneStream);
+      mediaRecorderRef.current = mediaRecorder;
+      
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        setRecordedAudio(audioBlob);
+        setIsRecording(false);
+        log("Recording completed");
+      };
+      
+      setIsRecording(true);
+      mediaRecorder.start();
+      log("Recording started");
+      
+      // Set up audio level monitoring during recording
+      if (analyserRef.current && audioContextRef.current) {
+        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+        const dB_THRESHOLD = -40; // dB threshold
+        let maxDbReached = false;
+        const recordingRef = { current: true };
+        
+        const monitorAudio = () => {
+          if (!recordingRef.current || !mediaRecorderRef.current) {
+            return;
+          }
+          
+          analyserRef.current!.getByteFrequencyData(dataArray);
+          const sum = dataArray.reduce((a, b) => a + b, 0);
+          const average = sum / dataArray.length;
+          
+          // Convert to dB (approximate)
+          const db = average > 0 ? 20 * Math.log10(average / 255) : -Infinity;
+          setAudioDbLevel(db);
+          
+          // Check if threshold reached
+          if (db >= dB_THRESHOLD && !maxDbReached) {
+            maxDbReached = true;
+            setThresholdReached(true);
+            log(`Audio threshold reached: ${db.toFixed(1)} dB`);
+          }
+          
+          if (recordingRef.current && mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+            audioAnimationRef.current = requestAnimationFrame(monitorAudio);
+          }
+        };
+        
+        monitorAudio();
+        
+        // Stop recording after 2 seconds
+        setTimeout(() => {
+          recordingRef.current = false;
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+            mediaRecorderRef.current.stop();
+          }
+        }, 2000);
+      }
+      
+    } catch (error) {
+      log(`Recording error: ${(error as Error).message}`);
+      setIsRecording(false);
+    }
+  }, [microphoneStream, log]);
+  
+  // Stop recording manually
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+  }, []);
+  
+  // Play recorded audio
+  const playRecording = useCallback(() => {
+    if (!recordedAudio) return;
+    
+    if (audioPlaybackRef.current) {
+      audioPlaybackRef.current.pause();
+      audioPlaybackRef.current = null;
+    }
+    
+    const audioUrl = URL.createObjectURL(recordedAudio);
+    const audio = new Audio(audioUrl);
+    audioPlaybackRef.current = audio;
+    
+    audio.onended = () => {
+      URL.revokeObjectURL(audioUrl);
+      audioPlaybackRef.current = null;
+    };
+    
+    audio.play().catch((error) => {
+      log(`Playback error: ${error.message}`);
+    });
+  }, [recordedAudio, log]);
   
   // ============================================================================
   // Fullscreen Check
@@ -692,61 +789,35 @@ export function usePrecheck({
   
   const checkNetwork = useCallback(async (): Promise<CheckResult> => {
     log("Starting network check...");
-    updateCheck("network", { status: "running", message: "Testing network..." });
+    updateCheck("network", { status: "running", message: "Checking internet connection..." });
     
     try {
-      // Latency test
-      const latencyStart = performance.now();
-      await fetch(LATENCY_TEST_URL, { 
-        method: "GET",
+      // Simple connectivity test - fetch a small resource
+      const testStart = performance.now();
+      const response = await fetch("https://www.google.com/favicon.ico", { 
+        method: "HEAD",
         cache: "no-store",
+        mode: "no-cors", // Use no-cors to avoid CORS issues
       });
-      const latencyMs = Math.round(performance.now() - latencyStart);
-      log(`Latency test: ${latencyMs}ms`);
+      const latencyMs = Math.round(performance.now() - testStart);
+      log(`Network connectivity test: ${latencyMs}ms`);
       
-      // Download speed test
-      const testData = new Uint8Array(BANDWIDTH_TEST_SIZE);
-      const blob = new Blob([testData]);
-      const testUrl = URL.createObjectURL(blob);
-      
-      const downloadStart = performance.now();
-      const response = await fetch(testUrl);
-      await response.blob();
-      const downloadTime = (performance.now() - downloadStart) / 1000; // seconds
-      URL.revokeObjectURL(testUrl);
-      
-      const downloadSpeedMbps = (BANDWIDTH_TEST_SIZE * 8 / downloadTime) / 1_000_000;
-      log(`Download speed: ${downloadSpeedMbps.toFixed(2)} Mbps`);
-      
+      // If we get here, internet is accessible
       const metrics: NetworkMetrics = {
         latencyMs,
-        downloadSpeedMbps: parseFloat(downloadSpeedMbps.toFixed(2)),
+        downloadSpeedMbps: 0, // Not measured
       };
       setNetworkMetrics(metrics);
       
-      // Evaluate results
-      const latencyOk = latencyMs < maxLatencyMs;
-      const speedOk = downloadSpeedMbps >= minDownloadMbps;
-      const passed = latencyOk && speedOk;
-      
-      const issues: string[] = [];
-      if (!latencyOk) issues.push(`High latency (${latencyMs}ms > ${maxLatencyMs}ms)`);
-      if (!speedOk) issues.push(`Slow download (${downloadSpeedMbps.toFixed(1)} Mbps < ${minDownloadMbps} Mbps)`);
-      
-      log(`Network check ${passed ? "passed" : "failed"}: ${issues.join(", ") || "OK"}`);
+      log("Network check passed: Internet connection available");
       
       const result: CheckResult = {
         type: "network",
-        status: passed ? "passed" : "failed",
-        message: passed 
-          ? `Network OK: ${latencyMs}ms latency, ${downloadSpeedMbps.toFixed(1)} Mbps`
-          : `Network issues: ${issues.join(", ")}`,
+        status: "passed",
+        message: "Internet connection available",
         details: {
           latencyMs: metrics.latencyMs,
-          downloadSpeedMbps: metrics.downloadSpeedMbps,
-          uploadSpeedMbps: metrics.uploadSpeedMbps,
         },
-        troubleshooting: passed ? undefined : getTroubleshooting("network"),
         lastChecked: new Date(),
       };
       
@@ -757,14 +828,14 @@ export function usePrecheck({
       const result: CheckResult = {
         type: "network",
         status: "failed",
-        message: "Network test failed. Please check your internet connection.",
+        message: "No internet connection. Please check your network settings.",
         troubleshooting: getTroubleshooting("network"),
         lastChecked: new Date(),
       };
       updateCheck("network", result);
       return result;
     }
-  }, [maxLatencyMs, minDownloadMbps, updateCheck, log]);
+  }, [updateCheck, log]);
   
   // ============================================================================
   // Tab Switch Check
@@ -987,6 +1058,13 @@ export function usePrecheck({
     cameraStream,
     microphoneStream,
     audioLevel,
+    isRecording,
+    recordedAudio,
+    audioDbLevel,
+    thresholdReached,
+    startRecording,
+    stopRecording,
+    playRecording,
     stopAllStreams,
     logs,
     clearLogs,
