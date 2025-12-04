@@ -34,18 +34,14 @@ export const authOptions: NextAuthOptions = {
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
-        mode: { label: "Mode", type: "text" },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
           throw new Error("Email and password are required");
         }
 
-        const endpoint =
-          credentials.mode === "super_admin" ? "/api/auth/superadmin-login" : "/api/auth/login";
-
         try {
-          const response = await fastApiClient.post(endpoint, {
+          const response = await fastApiClient.post("/api/auth/login", {
             email: credentials.email,
             password: credentials.password,
           });
@@ -207,6 +203,18 @@ export const authOptions: NextAuthOptions = {
       (session as any).refreshToken = token.refreshToken as string | undefined;
       (session as any).provider = token.provider as string | undefined;
       return session;
+    },
+    async redirect({ url, baseUrl }) {
+      // Handle role-based redirects
+      // If redirecting to home page or dashboard, we'll let the pages handle it
+      // This prevents interfering with explicit redirects from signin
+      if (url === `${baseUrl}/` || url === baseUrl) {
+        // If going to home, let home page handle redirect based on role
+        return url;
+      }
+      
+      // For other URLs, allow them through
+      return url.startsWith(baseUrl) ? url : baseUrl;
     },
   },
 };

@@ -157,7 +157,32 @@ export default function SignInPage({ providers }: SignInPageProps) {
       return;
     }
 
-    router.push(result?.url ?? callbackUrl);
+    // Set flag to prevent home page from redirecting
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("justSignedIn", "true");
+    }
+
+    // Wait a bit for NextAuth to process the session, then redirect based on role
+    // Use a small delay to ensure session is ready
+    setTimeout(async () => {
+      try {
+        const session = await fetch("/api/auth/session").then((res) => res.json());
+        const userRole = session?.user?.role;
+        
+        if (userRole === "super_admin") {
+          window.location.replace("/super-admin");
+        } else if (userRole) {
+          // Explicitly redirect org_admin and other roles to dashboard
+          window.location.replace("/dashboard");
+        } else {
+          // Fallback to callbackUrl if role not available yet
+          window.location.replace(result?.url ?? callbackUrl);
+        }
+      } catch (error) {
+        // If session fetch fails, redirect to dashboard as fallback
+        window.location.replace("/dashboard");
+      }
+    }, 150);
   };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -186,7 +211,32 @@ export default function SignInPage({ providers }: SignInPageProps) {
       return;
     }
 
-    router.push(result?.url ?? callbackUrl);
+    // Set flag to prevent home page from redirecting
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("justSignedIn", "true");
+    }
+
+    // Wait a bit for NextAuth to process the session, then redirect based on role
+    // Use a small delay to ensure session is ready
+    setTimeout(async () => {
+      try {
+        const session = await fetch("/api/auth/session").then((res) => res.json());
+        const userRole = session?.user?.role;
+        
+        if (userRole === "super_admin") {
+          window.location.replace("/super-admin");
+        } else if (userRole) {
+          // Explicitly redirect org_admin and other roles to dashboard
+          window.location.replace("/dashboard");
+        } else {
+          // Fallback to callbackUrl if role not available yet
+          window.location.replace(result?.url ?? callbackUrl);
+        }
+      } catch (error) {
+        // If session fetch fails, redirect to dashboard as fallback
+        window.location.replace("/dashboard");
+      }
+    }, 150);
   };
 
   return (

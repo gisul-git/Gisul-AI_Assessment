@@ -20,8 +20,37 @@ export default function HomePage() {
   const router = useRouter();
 
   useEffect(() => {
+    // Only redirect authenticated users away from home page
+    // Add a small delay to prevent race conditions with signin redirects
     if (status === "authenticated") {
-      router.replace("/dashboard");
+      const redirectTimer = setTimeout(async () => {
+        try {
+          // Check if we just signed in (session storage flag set by signin page)
+          const justSignedIn = typeof window !== "undefined" && 
+            sessionStorage.getItem("justSignedIn") === "true";
+          
+          // If we just signed in, clear the flag and let signin page handle redirect
+          if (justSignedIn) {
+            sessionStorage.removeItem("justSignedIn");
+            return; // Don't redirect, signin page will handle it
+          }
+          
+          const session = await fetch("/api/auth/session").then((res) => res.json());
+          const userRole = session?.user?.role;
+          
+          if (userRole === "super_admin") {
+            router.replace("/super-admin");
+          } else if (userRole) {
+            // Only redirect if we have a role (org_admin, editor, viewer, etc.)
+            router.replace("/dashboard");
+          }
+        } catch (error) {
+          // If session fetch fails, don't redirect (let user stay on home page)
+          console.error("Failed to fetch session for redirect:", error);
+        }
+      }, 200); // Small delay to allow signin redirects to complete
+      
+      return () => clearTimeout(redirectTimer);
     }
   }, [status, router]);
 

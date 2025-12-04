@@ -23,7 +23,6 @@ from ..schemas.auth import (
     OAuthLoginRequest,
     OrgSignupRequest,
     SendVerificationCodeRequest,
-    SuperAdminSignupRequest,
     VerifyEmailCodeRequest,
 )
 from ..utils.email import get_email_service
@@ -252,49 +251,6 @@ async def _find_user_by_email(db: AsyncIOMotorDatabase, email: str) -> dict | No
         preferred["email"] = normalized
 
     return preferred
-
-
-@router.post("/superadmin-signup")
-async def super_admin_signup(
-    payload: SuperAdminSignupRequest,
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    email = _normalize_email(payload.email)
-    existing = await _find_user_by_email(db, email)
-    if existing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Super Admin already exists")
-
-    # Check if there's already a pending signup for this email (and if it's expired)
-    pending = await db.email_verifications.find_one({"email": email, "pendingSignup": {"$exists": True}})
-    if pending:
-        # Check if the pending signup code has expired
-        is_expired = await _check_and_cleanup_expired_verification(db, email)
-        if not is_expired:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification email already sent. Please check your email or wait for it to expire.")
-
-    # Store pending signup data (will be created after verification)
-    pending_signup_data = {
-        "name": sanitize_text_field(payload.name),
-        "password": get_password_hash(payload.password),
-        "role": "super_admin",
-    }
-
-    # Send verification email with pending signup data
-    try:
-        await _send_verification_email(db, email, payload.name, pending_signup_data)
-        logger.info("Verification email sent to super admin: %s", email)
-    except Exception as exc:
-        logger.error("Failed to send verification email to super admin %s: %s", email, exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to send verification email. Please try again.",
-        ) from exc
-
-    return success_response(
-        "Please check your email for verification code. Account will be created after verification.",
-        {"email": email},
-        status_code=status.HTTP_201_CREATED,
-    )
 
 
 @router.post("/org-signup")
@@ -578,60 +534,6 @@ async def verify_email_code(
 
 
 @_apply_rate_limit
-@router.post("/superadmin-login")
-async def super_admin_login(
-    request: Request,
-    payload: LoginRequest,
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    """Super admin login with rate limiting, account lockout, and generic error messages."""
-    settings = get_settings()
-    
-    email = _normalize_email(payload.email)
-    
-    # Check account lockout
-    is_locked, lockout_message = await _check_account_lockout(db, email)
-    if is_locked:
-        logger.warning("Locked account login attempt: %s", email)
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=lockout_message)
-    
-    user = await _find_user_by_email(db, email)
-    
-    # Generic error message to prevent user enumeration
-    generic_error = "Invalid email or password"
-    
-    if not user or user.get("role") != "super_admin":
-        logger.info("Super admin login attempt for non-existent user: %s", payload.email)
-        await _increment_failed_attempts(db, email)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=generic_error)
-
-    if not user.get("password"):
-        logger.info("Super admin login attempt - password not set: %s", payload.email)
-        await _increment_failed_attempts(db, email)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=generic_error)
-
-    if not verify_password(payload.password, user["password"]):
-        logger.info("Invalid password attempt for super admin: %s", payload.email)
-        await _increment_failed_attempts(db, email)
-        # Check if account should be locked after this attempt
-        is_locked, lockout_message = await _check_account_lockout(db, email)
-        if is_locked:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=lockout_message)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=generic_error)
-
-    # Check email verification
-    if not user.get("emailVerified"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email not verified. Please verify your email before signing in.",
-        )
-
-    # Clear failed attempts on successful login
-    await _clear_failed_attempts(db, email)
-    return _build_login_success_response(user)
-
-
-@_apply_rate_limit
 @router.post("/login")
 async def email_login(
     request: Request,
@@ -654,7 +556,7 @@ async def email_login(
     # Generic error message to prevent user enumeration
     generic_error = "Invalid email or password"
     
-    if not user or user.get("role") == "super_admin":
+    if not user:
         logger.info("Login attempt for non-existent user: %s", payload.email)
         await _increment_failed_attempts(db, email)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=generic_error)

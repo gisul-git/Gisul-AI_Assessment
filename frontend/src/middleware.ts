@@ -17,7 +17,6 @@ export default withAuth(
           "/",
           "/auth/signin",
           "/auth/signup",
-          "/auth/super-admin-signup",
           "/api/auth",
           "/api/assessment",
         ];

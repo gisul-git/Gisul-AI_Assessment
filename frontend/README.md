@@ -7,8 +7,7 @@ implements authentication with NextAuth, supporting:
 - Google OAuth 2.0 via NextAuth
 - Microsoft/Azure AD SSO via NextAuth
 - Dedicated portals for organization users (`/auth/signin`) and super admins
-  (`/auth/super-admin`), plus a guided super admin onboarding page
-  (`/auth/super-admin-signup`)
+  (`/super-admin`)
 
 ## Getting Started
 
@@ -39,12 +38,11 @@ AZURE_AD_TENANT_ID=common
 
 ## Auth Flow Overview
 
-1. **OTP Login**
-   - Users request an OTP through the organization or super admin portals.
-   - Next.js proxies the request to FastAPI using `/api/auth/request-otp`.
-   - After entering the email/OTP, the NextAuth credentials provider calls
-     FastAPI `/api/auth/verify-otp`. The returned JWT is stored in the session
-     for subsequent API calls.
+1. **Email/Password Login**
+   - Users sign in through the organization portal (`/auth/signin`).
+   - NextAuth credentials provider calls FastAPI `/api/auth/login`.
+   - The returned JWT is stored in the session for subsequent API calls.
+   - Super admin users are automatically redirected to `/super-admin` dashboard.
 
 2. **Google & Microsoft SSO**
    - Configure the provider credentials in the `.env` file.

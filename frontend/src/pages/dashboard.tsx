@@ -182,7 +182,10 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
             </span>
             <button
               type="button"
-              onClick={() => signOut({ callbackUrl: "/auth/signin" })}
+              onClick={async () => {
+                await signOut({ redirect: false });
+                window.location.href = "/auth/signin";
+              }}
               className="btn-secondary"
               style={{
                 marginTop: 0,
