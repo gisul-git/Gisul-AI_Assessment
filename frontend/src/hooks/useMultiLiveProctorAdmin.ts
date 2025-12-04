@@ -78,7 +78,8 @@ export function useMultiLiveProctorAdmin({
 
   // Connect to a single candidate's stream
   const connectToCandidate = useCallback(async (session: CandidateSession) => {
-    const { sessionId, candidateId, candidateName } = session;
+    const { sessionId, candidateId } = session;
+    const candidateName = session.candidateName || candidateId || "Unknown";
     
     // Skip if already connected
     if (peerConnectionsRef.current.has(sessionId)) {
@@ -106,8 +107,8 @@ export function useMultiLiveProctorAdmin({
     peerConnectionsRef.current.set(sessionId, pc);
 
     // Track received streams - use order-based identification
-    // First video stream = webcam, second video stream = screen (matching how candidate adds them)
-    let receivedStreamCount = 0;
+    // First stream = webcam, second stream = screen (matching how candidate adds them)
+    const receivedStreams: MediaStream[] = [];
     const receivedStreamIds = new Set<string>();
 
     pc.ontrack = (event) => {
@@ -122,14 +123,15 @@ export function useMultiLiveProctorAdmin({
           return;
         }
         receivedStreamIds.add(streamId);
-        receivedStreamCount++;
+        receivedStreams.push(stream);
         
-        // First stream = webcam, second stream = screen
+        // First stream = webcam (has video + audio tracks)
+        // Second stream = screen (has only video track)
         // (This matches the order candidate adds tracks in useLiveProctor)
-        if (receivedStreamCount === 1) {
+        if (receivedStreams.length === 1) {
           log(`Webcam stream received from ${candidateName} (first stream)`);
           updateCandidateStream(sessionId, { webcamStream: stream });
-        } else if (receivedStreamCount === 2) {
+        } else if (receivedStreams.length === 2) {
           log(`Screen stream received from ${candidateName} (second stream)`);
           updateCandidateStream(sessionId, { screenStream: stream });
         }
@@ -270,13 +272,19 @@ export function useMultiLiveProctorAdmin({
       const sessions = (data.data.sessions || []) as CandidateSession[];
       log(`Found ${sessions.length} existing sessions`);
 
+      // Ensure candidateName is set (use candidateId as fallback)
+      const sessionsWithNames = sessions.map(session => ({
+        ...session,
+        candidateName: session.candidateName || session.candidateId || "Unknown",
+      }));
+
       // Sessions with adminId="system" are fine - they were created when candidate started
       // We can connect to them directly without updating adminId
 
-      setActiveCandidates(sessions);
+      setActiveCandidates(sessionsWithNames);
 
       // Connect to each candidate's existing session
-      for (const session of sessions) {
+      for (const session of sessionsWithNames) {
         await connectToCandidate(session);
       }
 
@@ -288,10 +296,17 @@ export function useMultiLiveProctorAdmin({
           
           if (pollData.success && pollData.data.sessions) {
             const newSessions = pollData.data.sessions as CandidateSession[];
-            setActiveCandidates(newSessions);
+            
+            // Ensure candidateName is set (use candidateId as fallback)
+            const newSessionsWithNames = newSessions.map(session => ({
+              ...session,
+              candidateName: session.candidateName || session.candidateId || "Unknown",
+            }));
+            
+            setActiveCandidates(newSessionsWithNames);
             
             // Connect to any new candidates
-            for (const session of newSessions) {
+            for (const session of newSessionsWithNames) {
               if (!peerConnectionsRef.current.has(session.sessionId)) {
                 await connectToCandidate(session);
               }

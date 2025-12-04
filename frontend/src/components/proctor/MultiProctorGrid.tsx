@@ -38,6 +38,13 @@ function CandidateCard({
   useEffect(() => {
     if (webcamRef.current && stream.webcamStream) {
       webcamRef.current.srcObject = stream.webcamStream;
+      // Ensure video plays
+      webcamRef.current.play().catch(err => {
+        console.error("Error playing webcam stream:", err);
+      });
+    } else if (webcamRef.current && !stream.webcamStream) {
+      // Clear if stream is removed
+      webcamRef.current.srcObject = null;
     }
   }, [stream.webcamStream]);
 
@@ -45,6 +52,13 @@ function CandidateCard({
   useEffect(() => {
     if (screenRef.current && stream.screenStream) {
       screenRef.current.srcObject = stream.screenStream;
+      // Ensure video plays
+      screenRef.current.play().catch(err => {
+        console.error("Error playing screen stream:", err);
+      });
+    } else if (screenRef.current && !stream.screenStream) {
+      // Clear if stream is removed
+      screenRef.current.srcObject = null;
     }
   }, [stream.screenStream]);
 
