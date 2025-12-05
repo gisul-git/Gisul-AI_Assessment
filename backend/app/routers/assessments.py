@@ -545,10 +545,32 @@ async def generate_topics_from_skill_endpoint(
     current_user: Dict[str, Any] = Depends(require_editor),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Generate topics from a single skill/domain input."""
+    """Generate topics from skill(s) input. Handles both single skill and comma-separated multiple skills."""
     try:
-        topics = await generate_topics_from_skill(payload.skill, payload.experienceMin, payload.experienceMax)
-        question_types = await get_relevant_question_types(payload.skill)
+        # Parse skills: if comma-separated, split into list; otherwise treat as single skill
+        skill_input = payload.skill.strip()
+        if "," in skill_input:
+            # Multiple skills (comma-separated) - use generate_topics_from_selected_skills
+            skills_list = [s.strip() for s in skill_input.split(",") if s.strip()]
+            if not skills_list:
+                raise HTTPException(status_code=400, detail="No valid skills provided")
+            
+            # Filter out aptitude skills (only use technical skills for topic generation)
+            _, technical_skills = _separate_skills(skills_list)
+            if not technical_skills:
+                raise HTTPException(status_code=400, detail="No technical skills found. Please provide technical skills for topic generation.")
+            
+            topics = await generate_topics_from_selected_skills(
+                technical_skills,
+                payload.experienceMin,
+                payload.experienceMax
+            )
+            # Get question types from the first skill (or combine if needed)
+            question_types = await get_relevant_question_types(technical_skills[0] if technical_skills else skill_input)
+        else:
+            # Single skill - use generate_topics_from_skill
+            topics = await generate_topics_from_skill(payload.skill, payload.experienceMin, payload.experienceMax)
+            question_types = await get_relevant_question_types(payload.skill)
         
         return success_response(
             "Topics generated successfully",
@@ -557,6 +579,8 @@ async def generate_topics_from_skill_endpoint(
                 "questionTypes": question_types,
             }
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"Error generating topics from skill: {exc}")
         raise HTTPException(status_code=500, detail="Failed to generate topics") from exc
@@ -807,8 +831,21 @@ async def create_assessment_from_job_designation(
     current_user: Dict[str, Any] = Depends(require_editor),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Create a new assessment with topics from job designation and selected skills."""
+    """Create a new assessment with topics from job designation and selected skills, or update existing if assessmentId is provided."""
     try:
+        # Check if we're updating an existing assessment
+        existing_assessment = None
+        if hasattr(payload, 'assessmentId') and payload.assessmentId:
+            try:
+                existing_assessment = await _get_assessment(db, payload.assessmentId)
+                _check_assessment_access(existing_assessment, current_user)
+                logger.info(f"Updating existing assessment {payload.assessmentId} with new topics")
+            except HTTPException:
+                # Assessment doesn't exist or access denied, create new one
+                existing_assessment = None
+            except Exception as exc:
+                logger.warning(f"Error fetching existing assessment: {exc}. Creating new assessment.")
+                existing_assessment = None
         # Sanitize user inputs to prevent XSS
         sanitized_job_designation = sanitize_text_field(payload.jobDesignation)
         sanitized_skills = [sanitize_text_field(skill) for skill in payload.selectedSkills]
@@ -944,31 +981,60 @@ async def create_assessment_from_job_designation(
         elif is_aptitude:
             default_title = f"Aptitude Assessment: {sanitized_job_designation}"
         
-        assessment_doc: Dict[str, Any] = {
-            "title": default_title,  # Set default title based on job designation
-            "description": description,  # Use generated description
-            "topics": topic_docs,
-            "customTopics": custom_topics,
-            "assessmentType": assessment_types if assessment_types else ["technical"],
-            "status": "draft",
-            "createdBy": to_object_id(current_user.get("id")),
-            "organization": to_object_id(current_user.get("organization")) if current_user.get("organization") else None,
-            "isGenerated": False,
-            "createdAt": _now_utc(),
-            "updatedAt": _now_utc(),
-            "jobDesignation": sanitized_job_designation,
-            "selectedSkills": sanitized_skills,
-            "experienceMin": payload.experienceMin,
-            "experienceMax": payload.experienceMax,
-            "availableQuestionTypes": all_question_types,
-            "isAptitudeAssessment": is_aptitude,  # Flag for frontend (true if aptitude is included)
-        }
-        
-        result = await db.assessments.insert_one(assessment_doc)
-        assessment_doc["_id"] = result.inserted_id
+        if existing_assessment:
+            # UPDATE EXISTING ASSESSMENT: Replace all topics and clear questions
+            existing_assessment["topics"] = topic_docs  # Replace all topics
+            existing_assessment["customTopics"] = custom_topics
+            existing_assessment["assessmentType"] = assessment_types if assessment_types else ["technical"]
+            existing_assessment["updatedAt"] = _now_utc()
+            existing_assessment["jobDesignation"] = sanitized_job_designation
+            existing_assessment["selectedSkills"] = sanitized_skills
+            existing_assessment["experienceMin"] = payload.experienceMin
+            existing_assessment["experienceMax"] = payload.experienceMax
+            existing_assessment["availableQuestionTypes"] = all_question_types
+            existing_assessment["isAptitudeAssessment"] = is_aptitude
+            
+            # Clear all questions from all topics (regeneration means fresh start)
+            for topic_doc in topic_docs:
+                topic_doc["questions"] = []
+                topic_doc["numQuestions"] = 0
+                topic_doc["questionConfigs"] = []
+            
+            # Clear preview questions as well
+            existing_assessment["previewQuestions"] = []
+            
+            # Update the assessment in database
+            await _save_assessment(db, existing_assessment)
+            assessment_doc = existing_assessment
+            
+            logger.info(f"Updated assessment {payload.assessmentId} with {len(topic_docs)} new topics. Cleared all questions.")
+        else:
+            # CREATE NEW ASSESSMENT
+            assessment_doc: Dict[str, Any] = {
+                "title": default_title,  # Set default title based on job designation
+                "description": description,  # Use generated description
+                "topics": topic_docs,
+                "customTopics": custom_topics,
+                "assessmentType": assessment_types if assessment_types else ["technical"],
+                "status": "draft",
+                "createdBy": to_object_id(current_user.get("id")),
+                "organization": to_object_id(current_user.get("organization")) if current_user.get("organization") else None,
+                "isGenerated": False,
+                "createdAt": _now_utc(),
+                "updatedAt": _now_utc(),
+                "jobDesignation": sanitized_job_designation,
+                "selectedSkills": sanitized_skills,
+                "experienceMin": payload.experienceMin,
+                "experienceMax": payload.experienceMax,
+                "availableQuestionTypes": all_question_types,
+                "isAptitudeAssessment": is_aptitude,  # Flag for frontend (true if aptitude is included)
+            }
+            
+            result = await db.assessments.insert_one(assessment_doc)
+            assessment_doc["_id"] = result.inserted_id
         
         return success_response(
-            "Assessment created successfully",
+            "Assessment created successfully" if not existing_assessment else "Assessment topics regenerated successfully",
             {
                 "assessment": serialize_document(assessment_doc),
                 "questionTypes": assessment_doc.get("availableQuestionTypes", ["MCQ"]),

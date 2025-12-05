@@ -806,81 +806,85 @@ export default function CreateNewAssessmentPage() {
       // If editing and assessment already exists, skip creation and just update topics
       if (isEditMode && assessmentId) {
         // For editing, we'll update the existing assessment's topics
-        // First, get the current assessment to preserve other data
-        const assessmentResponse = await axios.get(`/api/assessments/get-questions?assessmentId=${assessmentId}`);
-        if (assessmentResponse.data?.success) {
-          // Update job designation and skills in the assessment
-          // Then regenerate topics using the same endpoint but it will update existing
-          const response = await axios.post("/api/assessments/create-from-job-designation", {
-            jobDesignation: jobDesignation.trim(),
-            selectedSkills: selectedSkills,
-            experienceMin: experienceMin.toString(),
-            experienceMax: experienceMax.toString(),
-          });
+        // Call create-from-job-designation which will update existing assessment
+        const response = await axios.post("/api/assessments/create-from-job-designation", {
+          assessmentId: assessmentId, // Pass assessmentId to update existing instead of creating new
+          jobDesignation: jobDesignation.trim(),
+          selectedSkills: selectedSkills,
+          experienceMin: experienceMin.toString(),
+          experienceMax: experienceMax.toString(),
+        });
+        
+        // If a new assessment was created, use its ID; otherwise keep the existing one
+        if (response.data?.success) {
+          const data = response.data.data;
+          const newAssessmentId = data.assessment._id || data.assessment.id;
+          // Only update if we got a different ID (shouldn't happen, but safety check)
+          if (newAssessmentId !== assessmentId) {
+            setAssessmentId(newAssessmentId);
+          }
           
-          // If a new assessment was created, use its ID; otherwise keep the existing one
-          if (response.data?.success) {
-            const data = response.data.data;
-            const newAssessmentId = data.assessment._id || data.assessment.id;
-            // Only update if we got a different ID (shouldn't happen, but safety check)
-            if (newAssessmentId !== assessmentId) {
-              setAssessmentId(newAssessmentId);
-            }
-            
-            const isAptitude = data.assessment?.isAptitudeAssessment || false;
-            setTopics(data.assessment.topics.map((t: any) => t.topic));
-            setAvailableQuestionTypes(data.questionTypes || QUESTION_TYPES);
-            
-            setTopicConfigs(
-              data.assessment.topics.map((t: any) => {
-                const isTopicAptitude = t.isAptitude === true || (isAptitude && t.category === "aptitude");
+          // IMPORTANT: Use the response data directly (it's already the updated assessment)
+          // No need to fetch again - the backend returns the updated assessment
+          const updatedAssessment = data.assessment;
+          const isAptitude = updatedAssessment?.isAptitudeAssessment || false;
+          
+          console.log(`[Regenerate Topics] Updated topics from response:`, updatedAssessment.topics?.map((t: any) => t.topic));
+          console.log(`[Regenerate Topics] Total topics: ${updatedAssessment.topics?.length || 0}`);
+          
+          // Update state immediately with new topics
+          setTopics(updatedAssessment.topics.map((t: any) => t.topic));
+          setAvailableQuestionTypes(data.questionTypes || QUESTION_TYPES);
+          
+          setTopicConfigs(
+            updatedAssessment.topics.map((t: any) => {
+              const isTopicAptitude = t.isAptitude === true || (isAptitude && t.category === "aptitude");
+              
+              if (isTopicAptitude) {
+                const availableSubTopics = t.availableSubTopics || t.subTopics || [];
+                const defaultSubTopic = availableSubTopics.length > 0 ? availableSubTopics[0] : undefined;
+                const selectedSubTopic = t.subTopic || defaultSubTopic;
                 
-                if (isTopicAptitude) {
-                  const availableSubTopics = t.availableSubTopics || t.subTopics || [];
-                  const defaultSubTopic = availableSubTopics.length > 0 ? availableSubTopics[0] : undefined;
-                  const selectedSubTopic = t.subTopic || defaultSubTopic;
-                  
-                  let defaultQuestionType = "MCQ";
-                  if (selectedSubTopic && t.aptitudeStructure?.subTopics?.[selectedSubTopic]) {
-                    const questionTypes = t.aptitudeStructure.subTopics[selectedSubTopic];
-                    defaultQuestionType = questionTypes.length > 0 ? questionTypes[0] : "MCQ";
-                  }
-                  
-                  return {
-                    topic: t.topic,
-                    questionTypeConfigs: [{
+                let defaultQuestionType = "MCQ";
+                if (selectedSubTopic && t.aptitudeStructure?.subTopics?.[selectedSubTopic]) {
+                  const questionTypes = t.aptitudeStructure.subTopics[selectedSubTopic];
+                  defaultQuestionType = questionTypes.length > 0 ? questionTypes[0] : "MCQ";
+                }
+                
+                return {
+                  topic: t.topic,
+                  questionTypeConfigs: [{
                     questionType: defaultQuestionType,
                     difficulty: t.difficulty || "Medium",
                     numQuestions: 1,
-                    }],
-                    isAptitude: true,
-                    subTopic: selectedSubTopic,
-                    aptitudeStructure: t.aptitudeStructure || undefined,
-                    availableSubTopics: availableSubTopics,
-                  };
-                } else {
-                  // Handle technical topic
-                  const questionType = t.questionTypes?.[0] || data.questionTypes?.[0] || QUESTION_TYPES[0];
-                  const isCoding = questionType === "coding";
-                  // Auto-detect language for coding questions
-                  const autoLanguage = isCoding ? getLanguageFromTopic(t.topic) : undefined;
-                  
-                  return {
-                    topic: t.topic,
-                questionTypeConfigs: [{
-                  questionType: questionType,
+                  }],
+                  isAptitude: true,
+                  subTopic: selectedSubTopic,
+                  aptitudeStructure: t.aptitudeStructure || undefined,
+                  availableSubTopics: availableSubTopics,
+                };
+              } else {
+                // Handle technical topic
+                const questionType = t.questionTypes?.[0] || data.questionTypes?.[0] || QUESTION_TYPES[0];
+                const isCoding = questionType === "coding";
+                // Auto-detect language for coding questions
+                const autoLanguage = isCoding ? getLanguageFromTopic(t.topic) : undefined;
+                
+                return {
+                  topic: t.topic,
+                  questionTypeConfigs: [{
+                    questionType: questionType,
                     difficulty: t.difficulty || "Medium",
                     numQuestions: 1,
-                  language: autoLanguage,
-                  judge0_enabled: isCoding ? true : undefined,
-                }],
-                    isAptitude: false,
-                coding_supported: t.coding_supported !== undefined ? t.coding_supported : (isCoding ? true : undefined),
-                  };
-                }
-              })
-            );
-          }
+                    language: autoLanguage,
+                    judge0_enabled: isCoding ? true : undefined,
+                  }],
+                  isAptitude: false,
+                  coding_supported: t.coding_supported !== undefined ? t.coding_supported : (isCoding ? true : undefined),
+                };
+              }
+            })
+          );
         }
         setLoading(false);
         return;
@@ -1436,14 +1440,22 @@ export default function CreateNewAssessmentPage() {
         // No topic specified = delete all
       });
       
-      // Clear questions state
+      // Clear questions state immediately
       setQuestions([]);
       setPreviewQuestions([]);
       
-      // Then regenerate topics - this will create entirely new topics
+      // Clear topic configs immediately to show loading state
+      setTopicConfigs([]);
+      setTopics([]);
+      
+      console.log(`[Regenerate Topics] Starting regeneration for assessment ${assessmentId}`);
+      
+      // Then regenerate topics - this will update the existing assessment
       // The handleGenerateTopics function will handle updating the existing assessment
       // by calling create-from-job-designation which will replace all topics
       await handleGenerateTopics();
+      
+      console.log(`[Regenerate Topics] Regeneration completed for assessment ${assessmentId}`);
     } catch (err: any) {
       console.error("Error regenerating topics:", err);
       setError(err.response?.data?.message || err.message || "Failed to regenerate topics");
@@ -1597,23 +1609,75 @@ export default function CreateNewAssessmentPage() {
           if (generateResponse.data?.success) {
             // Update questions state - remove old questions for this topic and add new ones
             const newQuestions: any[] = [];
-            generateResponse.data.data.topics.forEach((t: any) => {
-              if (t.questions && t.questions.length > 0) {
-                newQuestions.push(...t.questions);
-              }
+            
+            // Collect all questions from all topics in the response
+            if (generateResponse.data.data.topics && Array.isArray(generateResponse.data.data.topics)) {
+              generateResponse.data.data.topics.forEach((t: any) => {
+                if (t.questions && Array.isArray(t.questions) && t.questions.length > 0) {
+                  // Ensure each question has the correct topic name (use newTopicName in case it changed)
+                  const questionsWithTopic = t.questions.map((q: any) => ({
+                    ...q,
+                    topic: newTopicName, // Ensure all questions have the new topic name
+                  }));
+                  newQuestions.push(...questionsWithTopic);
+                }
+              });
+            }
+
+            console.log(`[Topic Regeneration] Backend returned ${newQuestions.length} new questions for topic '${newTopicName}'`);
+            console.log(`[Topic Regeneration] Response structure:`, {
+              hasData: !!generateResponse.data.data,
+              hasTopics: !!generateResponse.data.data.topics,
+              topicsCount: generateResponse.data.data.topics?.length || 0,
+              totalQuestions: generateResponse.data.data.totalQuestions || 0,
             });
+            console.log(`[Topic Regeneration] New questions breakdown:`, newQuestions.map((q: any, idx: number) => ({
+              index: idx,
+              topic: q.topic,
+              type: q.type,
+              questionPreview: q.questionText?.substring(0, 30) || q.question?.substring(0, 30) || 'N/A'
+            })));
+
+            if (newQuestions.length === 0) {
+              console.warn(`[Topic Regeneration] No questions were generated for topic '${newTopicName}'. Check backend response.`);
+              setError("No questions were generated. Please try again.");
+              return;
+            }
 
             // Filter out old questions for both old and new topic names (in case topic name changed)
             const updatedQuestions = questions.filter((q: any) => q.topic !== topic.topic && q.topic !== newTopicName);
             setQuestions([...updatedQuestions, ...newQuestions]);
             
             // Also update previewQuestions - remove old and add new for this topic only
+            // Use functional update to ensure we have the latest state
             setPreviewQuestions((prev) => {
               const filtered = prev.filter((q: any) => q.topic !== topic.topic && q.topic !== newTopicName);
-              return [...filtered, ...newQuestions];
+              const updated = [...filtered, ...newQuestions];
+              console.log(`[Topic Regeneration] Preview questions update: removed ${prev.length - filtered.length} old questions, added ${newQuestions.length} new questions. Total preview questions: ${updated.length} (was ${prev.length})`);
+              console.log(`[Topic Regeneration] Updated preview questions:`, updated.map((q: any, idx: number) => ({
+                index: idx,
+                topic: q.topic,
+                type: q.type,
+                questionPreview: q.questionText?.substring(0, 30) || q.question?.substring(0, 30) || 'N/A'
+              })));
+              return updated;
             });
             
-            console.log(`[Topic Regeneration] Generated ${newQuestions.length} new questions for topic '${newTopicName}'. Removed old questions for '${topic.topic}'.`);
+            // Reset preview index if it's out of bounds after update
+            setTimeout(() => {
+              setPreviewQuestions((current) => {
+                if (currentPreviewIndex >= current.length && current.length > 0) {
+                  console.log(`[Topic Regeneration] Adjusting preview index: ${currentPreviewIndex} -> ${current.length - 1}`);
+                  setCurrentPreviewIndex(current.length - 1);
+                }
+                return current; // Return unchanged to avoid double update
+              });
+            }, 100);
+            
+            console.log(`[Topic Regeneration] Successfully updated: Generated ${newQuestions.length} new questions for topic '${newTopicName}'. Removed old questions for '${topic.topic}'.`);
+          } else {
+            console.error(`[Topic Regeneration] Backend response was not successful:`, generateResponse.data);
+            setError("Failed to generate questions. Please try again.");
           }
         } catch (genErr: any) {
           // Log error but don't block - topic regeneration already succeeded
@@ -2084,26 +2148,41 @@ export default function CreateNewAssessmentPage() {
       const firstBatchResults = await Promise.all(firstBatchPromises);
       
       // Add all first batch questions to the array (check for duplicates)
+      console.log(`[Preview] First batch results: ${firstBatchResults.length} questions received`);
       firstBatchResults.forEach((question, idx) => {
         if (question) {
+          console.log(`[Preview] First batch result ${idx + 1}: topic=${question.topic}, type=${question.type}, hasText=${!!(question.questionText || question.question)}`);
+          
           // Check if this question already exists (avoid duplicates)
+          // Use task index if available, otherwise use question text + topic + type
           const questionExists = allPreviewQuestions.some((q: any) => {
+            // If both have task indices, compare by task index
+            if (q._taskIndex !== undefined && question._taskIndex !== undefined) {
+              return q._taskIndex === question._taskIndex;
+            }
+            // Otherwise, compare by question text, topic, and type
             const qText = q.questionText || q.question || '';
             const newQText = question.questionText || question.question || '';
             return qText === newQText && q.topic === question.topic && q.type === question.type;
           });
           
           if (questionExists) {
-            console.warn(`[Preview] First batch: Question ${idx + 1} already exists, skipping duplicate`);
+            console.warn(`[Preview] First batch: Question ${idx + 1} already exists, skipping duplicate. Current array length: ${allPreviewQuestions.length}`);
+            // Still increment counter for attempt tracking
+            currentIndex++;
           } else {
             allPreviewQuestions.push(question);
             currentIndex++;
-            console.log(`[Preview] First batch: Added question ${currentIndex}/${totalQuestions} - ${question.topic || 'Unknown'} - ${question.type || 'Unknown'}`);
+            console.log(`[Preview] First batch: Added question ${currentIndex}/${totalQuestions} - ${question.topic || 'Unknown'} - ${question.type || 'Unknown'}. Array now has ${allPreviewQuestions.length} questions`);
           }
         } else {
           console.warn(`[Preview] First batch: Failed to generate question ${idx + 1}`);
+          // Increment counter even for failed attempts
+          currentIndex++;
         }
       });
+      
+      console.log(`[Preview] First batch complete: ${allPreviewQuestions.length} questions in array, currentIndex=${currentIndex}`);
       
       // Update state once with all first batch questions
       setPreviewProgress({ current: currentIndex, total: totalQuestions });
@@ -2167,6 +2246,10 @@ export default function CreateNewAssessmentPage() {
           // Note: Preview questions will be saved automatically when navigating away (browser back or Back to Dashboard button)
         } else {
           console.warn(`[Preview] Sequential: Failed to generate question ${currentIndex + 1}/${totalQuestions} for topic ${task.topicConfig.topic} - ${task.topicConfig.questionType}`);
+          // Even if question generation failed, increment the attempt counter
+          // This ensures progress reflects all attempts, not just successes
+          currentIndex++;
+          setPreviewProgress({ current: currentIndex, total: totalQuestions });
         }
       }
 
@@ -2226,10 +2309,27 @@ export default function CreateNewAssessmentPage() {
       });
 
       if (response.data?.success && response.data.data.topics) {
-        const topic = response.data.data.topics[0];
-        if (topic.questions && topic.questions.length > 0) {
-          return topic.questions[0];
+        // Handle case where backend returns multiple topics (shouldn't happen, but handle it)
+        // Also handle case where a topic has multiple questions
+        const topics = response.data.data.topics;
+        console.log(`[generateSingleQuestion] Backend returned ${topics.length} topic(s) for ${topicConfig.topic}`);
+        
+        // Iterate through all topics to find questions
+        for (const topic of topics) {
+          if (topic.questions && Array.isArray(topic.questions) && topic.questions.length > 0) {
+            // If we find questions, return the first one
+            // Log if there are multiple questions
+            if (topic.questions.length > 1) {
+              console.warn(`[generateSingleQuestion] Topic ${topic.topic} has ${topic.questions.length} questions, returning first one`);
+            }
+            const question = topic.questions[0];
+            console.log(`[generateSingleQuestion] Returning question from topic: ${topic.topic}, question type: ${question.type || 'unknown'}`);
+            return question;
+          }
         }
+        
+        // If no questions found in any topic, log warning
+        console.warn(`[generateSingleQuestion] No questions found in response for topic ${topicConfig.topic}`);
       }
       return null;
     } catch (err: any) {
@@ -3511,7 +3611,19 @@ export default function CreateNewAssessmentPage() {
                       type="button"
                     onClick={() => setCurrentStation(3)}
                       className="btn-primary"
-                      style={{ flex: 1 }}
+                      style={{ 
+                        flex: 1,
+                        opacity: (previewGenerating || (previewProgress.total > 0 && previewProgress.current < previewProgress.total)) ? 0.6 : 1,
+                        cursor: (previewGenerating || (previewProgress.total > 0 && previewProgress.current < previewProgress.total)) ? "not-allowed" : "pointer"
+                      }}
+                      disabled={previewGenerating || (previewProgress.total > 0 && previewProgress.current < previewProgress.total)}
+                      title={
+                        previewGenerating 
+                          ? "Please wait for all questions to be generated" 
+                          : (previewProgress.total > 0 && previewProgress.current < previewProgress.total)
+                          ? `Generating questions: ${previewProgress.current}/${previewProgress.total} completed`
+                          : undefined
+                      }
                     >
                     Next
                     </button>
@@ -4468,19 +4580,16 @@ export default function CreateNewAssessmentPage() {
                     const totalQuestions = questionsToShow.length;
                     // Ensure index is within bounds (clamp to valid range)
                     const safeIndex = totalQuestions > 0 ? Math.min(Math.max(0, currentPreviewIndex), totalQuestions - 1) : 0;
+                    // Force re-retrieval of question using the safe index
                     const currentQuestion = questionsToShow[safeIndex];
                     
                     // Debug logging with question details
-                    console.log(`[Preview] Rendering question: index=${currentPreviewIndex}, safeIndex=${safeIndex}, total=${totalQuestions}, hasQuestion=${!!currentQuestion}`);
+                    console.log(`[Preview] Rendering question: currentPreviewIndex=${currentPreviewIndex}, safeIndex=${safeIndex}, total=${totalQuestions}, hasQuestion=${!!currentQuestion}`);
                     if (currentQuestion) {
                       console.log(`[Preview] Question details: topic=${currentQuestion.topic}, type=${currentQuestion.type}, questionText=${currentQuestion.questionText?.substring(0, 50) || currentQuestion.question?.substring(0, 50) || 'N/A'}...`);
+                    } else {
+                      console.warn(`[Preview] No question found at index ${safeIndex} (currentPreviewIndex: ${currentPreviewIndex})`);
                     }
-                    console.log(`[Preview] All questions in array:`, questionsToShow.map((q: any, idx: number) => ({
-                      index: idx,
-                      topic: q.topic,
-                      type: q.type,
-                      questionPreview: q.questionText?.substring(0, 30) || q.question?.substring(0, 30) || 'N/A'
-                    })));
                     
                     return (
                       <>
@@ -4562,7 +4671,7 @@ export default function CreateNewAssessmentPage() {
                   </div>
 
                   <div
-                    key={`question-${safeIndex}-${totalQuestions}-${currentQuestion?._taskIndex ?? safeIndex}-${(currentQuestion?.questionText || currentQuestion?.question || '').substring(0, 20)}`}
+                    key={`question-${safeIndex}-${currentQuestion?.questionText?.substring(0, 50) || currentQuestion?.question?.substring(0, 50) || safeIndex}-${currentQuestion?.topic || 'unknown'}`}
                     style={{
                       backgroundColor: "#f8fafc",
                       padding: "1.5rem",
@@ -4572,17 +4681,16 @@ export default function CreateNewAssessmentPage() {
                   >
                     {currentQuestion?.questionText || currentQuestion?.question ? (
                       <div
-                        key={`question-content-${safeIndex}-${currentQuestion?._taskIndex ?? safeIndex}`}
+                        key={`question-content-${safeIndex}-${(currentQuestion?.questionText || currentQuestion?.question || '').substring(0, 30)}`}
                         style={{
                           fontSize: "1rem",
                           color: "#1e293b",
                           lineHeight: "1.6",
                           whiteSpace: "pre-wrap",
                         }}
-                        dangerouslySetInnerHTML={{
-                          __html: currentQuestion.questionText || currentQuestion.question || "",
-                        }}
-                      />
+                      >
+                        {currentQuestion.questionText || currentQuestion.question || ""}
+                      </div>
                     ) : (
                       <p style={{ color: "#94a3b8", margin: 0 }}>Question content not available</p>
                     )}
@@ -4691,19 +4799,25 @@ export default function CreateNewAssessmentPage() {
                             return newIndex;
                           });
                         }}
-                        disabled={navSafeIndex >= totalQuestions - 1 && !previewGenerating}
+                        disabled={
+                          navSafeIndex >= totalQuestions - 1 && 
+                          (previewGenerating || (previewProgress.total > 0 && previewProgress.current < previewProgress.total))
+                        }
                         className="btn-primary"
                         style={{
                           marginTop: 0,
                           opacity:
-                            navSafeIndex >= totalQuestions - 1 && !previewGenerating ? 0.5 : 1,
+                            navSafeIndex >= totalQuestions - 1 && 
+                            (previewGenerating || (previewProgress.total > 0 && previewProgress.current < previewProgress.total))
+                              ? 0.5 : 1,
                           cursor:
-                            navSafeIndex >= totalQuestions - 1 && !previewGenerating
+                            navSafeIndex >= totalQuestions - 1 && 
+                            (previewGenerating || (previewProgress.total > 0 && previewProgress.current < previewProgress.total))
                               ? "not-allowed"
                               : "pointer",
                         }}
                       >
-                        {navSafeIndex >= totalQuestions - 1 && previewGenerating
+                        {navSafeIndex >= totalQuestions - 1 && (previewGenerating || (previewProgress.total > 0 && previewProgress.current < previewProgress.total))
                           ? "Generating..."
                           : "Next"}
                       </button>

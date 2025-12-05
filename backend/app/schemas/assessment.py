@@ -169,6 +169,7 @@ class GenerateTopicCardsRequest(BaseModel):
 
 
 class CreateAssessmentFromJobDesignationRequest(BaseModel):
+    assessmentId: Optional[str] = Field(default=None, description="Optional: If provided, updates existing assessment instead of creating new one")
     jobDesignation: str = Field(..., min_length=1)
     selectedSkills: List[str] = Field(..., min_length=1)
     experienceMin: str = Field(default="0")
