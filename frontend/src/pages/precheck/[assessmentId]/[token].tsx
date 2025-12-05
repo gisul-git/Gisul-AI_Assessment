@@ -37,6 +37,13 @@ export default function PrecheckPage() {
       return;
     }
     
+    // Check if pre-check was already completed - if so, skip to instructions
+    const precheckCompleted = sessionStorage.getItem(`precheckCompleted_${assessmentId}`);
+    if (precheckCompleted && assessmentId && token) {
+      router.replace(`/assessment/${assessmentId}/${token}/instructions`);
+      return;
+    }
+    
     // Fetch assessment info
     const fetchAssessment = async () => {
       try {
@@ -66,8 +73,11 @@ export default function PrecheckPage() {
 
   // Handle modal completion
   const handlePrecheckComplete = () => {
+    // Mark pre-check as completed in sessionStorage
+    sessionStorage.setItem(`precheckCompleted_${assessmentId}`, "true");
     setShowModal(false);
-    router.push(`/assessment/${assessmentId}/${token}/instructions`);
+    // Use router.replace to prevent back navigation to pre-check
+    router.replace(`/assessment/${assessmentId}/${token}/instructions`);
   };
 
   if (isLoading) {

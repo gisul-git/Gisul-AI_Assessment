@@ -4,6 +4,7 @@ import { GetServerSideProps } from "next";
 import { requireAuth } from "../../../lib/auth";
 import Link from "next/link";
 import axios from "axios";
+import { BarChart3 } from "lucide-react";
 
 interface Question {
   questionText: string;
@@ -247,13 +248,34 @@ export default function QuestionsPage() {
           </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem", marginBottom: "1.5rem" }}>
-          <div>
-            <h1 style={{ margin: 0, marginBottom: "0.5rem", fontSize: "clamp(1.5rem, 4vw, 2rem)", color: "#1a1625", fontWeight: 700 }}>Generated Questions</h1>
-            <p style={{ color: "#64748b", margin: 0, fontSize: "0.9375rem" }}>
-              {hasQuestions
-                ? `${totalQuestions} question${totalQuestions !== 1 ? "s" : ""} across ${topics.length} topic${topics.length !== 1 ? "s" : ""}`
-                : "Generate questions for your configured topics"}
-            </p>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
+            <div>
+              <h1 style={{ margin: 0, marginBottom: "0.5rem", fontSize: "clamp(1.5rem, 4vw, 2rem)", color: "#1a1625", fontWeight: 700 }}>Generated Questions</h1>
+              <p style={{ color: "#64748b", margin: 0, fontSize: "0.9375rem" }}>
+                {hasQuestions
+                  ? `${totalQuestions} question${totalQuestions !== 1 ? "s" : ""} across ${topics.length} topic${topics.length !== 1 ? "s" : ""}`
+                  : "Generate questions for your configured topics"}
+              </p>
+            </div>
+            {id && typeof id === 'string' && (
+              <Link href={`/assessments/${id}/analytics`}>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                    padding: "0.75rem 1.5rem",
+                    fontSize: "0.875rem",
+                    marginTop: 0,
+                  }}
+                >
+                  <BarChart3 style={{ width: "16px", height: "16px" }} />
+                  Analytics
+                </button>
+              </Link>
+            )}
           </div>
           {!hasQuestions && (
             <button

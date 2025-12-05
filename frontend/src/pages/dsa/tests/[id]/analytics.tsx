@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
+import { useSession } from 'next-auth/react'
 import { Card, CardContent } from '../../../../components/dsa/ui/card'
 import { Button } from '../../../../components/dsa/ui/button'
 import dsaApi from '../../../../lib/dsa/api'
-import { ArrowLeft, Lightbulb, CheckCircle2, TrendingUp, AlertTriangle, Eye, Clock } from 'lucide-react'
+import { ArrowLeft, Lightbulb, CheckCircle2, TrendingUp, AlertTriangle, Eye, Clock, Video } from 'lucide-react'
+import { HumanProctorPanel } from '@/components/proctor/HumanProctorPanel'
 
 interface AIFeedback {
   overall_score?: number
@@ -84,6 +86,7 @@ interface CandidateAnalytics {
 
 export default function AnalyticsPage() {
   const router = useRouter()
+  const { data: session } = useSession()
   const { id: testId, candidate: candidateUserId } = router.query
   const [candidates, setCandidates] = useState<any[]>([])
   const [selectedCandidate, setSelectedCandidate] = useState<string | null>(null)
@@ -94,6 +97,7 @@ export default function AnalyticsPage() {
   const [eventTypeLabels, setEventTypeLabels] = useState<Record<string, string>>({})
   const [loadingProctorLogs, setLoadingProctorLogs] = useState(false)
   const [showProctorLogs, setShowProctorLogs] = useState(false)
+  const [showLiveProctor, setShowLiveProctor] = useState(false)
 
   const fetchAnalytics = async (userId: string) => {
     if (!testId || typeof testId !== 'string') return
@@ -456,14 +460,27 @@ export default function AnalyticsPage() {
                           </span>
                         )}
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowProctorLogs(!showProctorLogs)}
-                        disabled={loadingProctorLogs}
-                      >
-                        {loadingProctorLogs ? 'Loading...' : showProctorLogs ? 'Hide Logs' : 'Show Logs'}
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        {selectedCandidate && testId && typeof testId === 'string' && (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={() => setShowLiveProctor(true)}
+                            className="bg-green-600 hover:bg-green-700 text-white"
+                          >
+                            <Video className="h-4 w-4 mr-2" />
+                            Live Proctoring
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setShowProctorLogs(!showProctorLogs)}
+                          disabled={loadingProctorLogs}
+                        >
+                          {loadingProctorLogs ? 'Loading...' : showProctorLogs ? 'Hide Logs' : 'Show Logs'}
+                        </Button>
+                      </div>
                     </div>
 
                     {loadingProctorLogs ? (
@@ -514,10 +531,14 @@ export default function AnalyticsPage() {
                               <div className="mt-3">
                                 <div className="text-xs text-muted-foreground mb-2">Evidence Snapshot:</div>
                                 <img
-                                  src={`data:image/png;base64,${log.snapshotBase64}`}
+                                  src={log.snapshotBase64.startsWith("data:") ? log.snapshotBase64 : `data:image/png;base64,${log.snapshotBase64}`}
                                   alt="Violation snapshot"
                                   className="max-w-full h-auto rounded border border-slate-700"
                                   style={{ maxHeight: '200px' }}
+                                  onError={(e) => {
+                                    console.error("Error loading snapshot image:", e);
+                                    (e.target as HTMLImageElement).style.display = "none";
+                                  }}
                                 />
                               </div>
                             )}
@@ -671,6 +692,18 @@ export default function AnalyticsPage() {
           </div>
         </div>
       </div>
+
+      {/* Live Proctoring Panel */}
+      {showLiveProctor && selectedCandidate && testId && typeof testId === 'string' && (
+        <HumanProctorPanel
+          isOpen={showLiveProctor}
+          onClose={() => setShowLiveProctor(false)}
+          assessmentId={testId}
+          candidateId={selectedCandidate}
+          candidateName={analytics?.candidate?.name || undefined}
+          adminId={(session as any)?.user?.id || (session as any)?.user?.email || 'admin'}
+        />
+      )}
     </div>
   )
 }

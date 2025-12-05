@@ -386,6 +386,19 @@ export function useLiveProctor({
       return;
     }
     
+    // Wait for streams to be available (either pre-captured or we'll request them)
+    // Check if we have streams or can get them
+    const hasWebcam = (preWebcamStream && preWebcamStream.active) || 
+                      (webcamStreamRef.current && webcamStreamRef.current.active);
+    const hasScreen = (preScreenStream && preScreenStream.active) || 
+                     (screenStreamRef.current && screenStreamRef.current.active);
+    
+    if (!hasWebcam || !hasScreen) {
+      log("Waiting for streams to be available before creating session...", { hasWebcam, hasScreen });
+      // Don't create session yet - will be created when streams are available via checkForPendingSession
+      return;
+    }
+    
     try {
       log("Checking for existing session before creating initial session...");
       
@@ -444,7 +457,7 @@ export function useLiveProctor({
       log("Error creating initial session", err);
       isConnectingRef.current = false;
     }
-  }, [assessmentId, candidateId, log, startStreamingWithSession]);
+  }, [assessmentId, candidateId, log, startStreamingWithSession, preWebcamStream, preScreenStream]);
 
   // Start polling for admin sessions - use ref to avoid re-creating interval
   const checkForPendingSessionRef = useRef(checkForPendingSession);
@@ -455,9 +468,14 @@ export function useLiveProctor({
       return;
     }
     
-    log("Assessment started - creating initial session and starting to poll...", { assessmentId, candidateId });
+    log("Assessment started - creating initial session and starting to poll...", { 
+      assessmentId, 
+      candidateId,
+      hasWebcam: !!(preWebcamStream && preWebcamStream.active),
+      hasScreen: !!(preScreenStream && preScreenStream.active),
+    });
     
-    // Create session immediately when assessment starts
+    // Create session immediately when assessment starts (will wait for streams if needed)
     createInitialSession();
     
     // Use ref to always call latest version without changing interval
@@ -473,7 +491,7 @@ export function useLiveProctor({
         pollIntervalRef.current = null;
       }
     };
-  }, [assessmentId, candidateId, log, createInitialSession]); // Add createInitialSession to deps
+  }, [assessmentId, candidateId, log, createInitialSession, preWebcamStream, preScreenStream]); // Add streams to deps to retry when they become available
 
   // Public stop function
   const stopStreaming = useCallback(() => {

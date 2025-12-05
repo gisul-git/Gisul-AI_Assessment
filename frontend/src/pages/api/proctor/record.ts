@@ -72,6 +72,23 @@ export default async function handler(
       hasMetadata: !!metadata,
       hasSnapshot: !!snapshotBase64,
     }, null, 2));
+    
+    // Validate that userId and assessmentId are not empty
+    if (!userId || userId.trim() === "") {
+      console.error("[Proctor API] ERROR: userId is empty or missing!");
+      return res.status(400).json({
+        status: "error",
+        message: "userId is required and cannot be empty",
+      });
+    }
+    
+    if (!assessmentId || assessmentId.trim() === "") {
+      console.error("[Proctor API] ERROR: assessmentId is empty or missing!");
+      return res.status(400).json({
+        status: "error",
+        message: "assessmentId is required and cannot be empty",
+      });
+    }
 
     // Forward to backend FastAPI
     try {

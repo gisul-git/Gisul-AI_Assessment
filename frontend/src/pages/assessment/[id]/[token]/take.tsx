@@ -251,6 +251,7 @@ export default function CandidateAssessmentPage() {
   const {
     isStreaming: isLiveStreaming,
     connectionState: liveConnectionState,
+    stopStreaming: stopLiveProctoring,
   } = useLiveProctor({
     assessmentId: (id as string) || "",
     candidateId: candidateEmail || "",
@@ -568,6 +569,12 @@ export default function CandidateAssessmentPage() {
           });
           
           try {
+            // Stop live proctoring session before submitting
+            if (stopLiveProctoring) {
+              console.log("[Submission] Stopping live proctoring session...");
+              stopLiveProctoring();
+            }
+            
             const response = await axios.post("/api/assessment/submit-answers", {
               assessmentId: id,
               token,
@@ -990,6 +997,12 @@ export default function CandidateAssessmentPage() {
 
     setSubmitting(true);
     try {
+      // Stop live proctoring session before submitting
+      if (stopLiveProctoring) {
+        console.log("[Submission] Stopping live proctoring session...");
+        stopLiveProctoring();
+      }
+      
       const response = await axios.post("/api/assessment/submit-answers", {
         assessmentId: id,
         token,

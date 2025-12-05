@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
 import { FullscreenPrompt, CameraProctorModal } from "@/components/proctor";
 import { useCameraProctor } from "@/hooks/useCameraProctor";
@@ -15,6 +15,7 @@ export default function AssessmentInstructionsPage() {
   const [isStarting, setIsStarting] = useState(false);
   const [fullscreenError, setFullscreenError] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const hasCheckedPrecheckRef = useRef(false); // Prevent multiple redirects
 
   // Camera proctoring hook
   const {
@@ -28,6 +29,9 @@ export default function AssessmentInstructionsPage() {
   });
 
   useEffect(() => {
+    // Prevent multiple redirects
+    if (hasCheckedPrecheckRef.current) return;
+    
     const storedEmail = sessionStorage.getItem("candidateEmail");
     const storedName = sessionStorage.getItem("candidateName");
     setEmail(storedEmail);
@@ -35,11 +39,23 @@ export default function AssessmentInstructionsPage() {
 
     if (!storedEmail || !storedName) {
       if (id && token) {
+        hasCheckedPrecheckRef.current = true;
         router.replace(`/assessment/${id}/${token}`);
       }
-    } else {
-      setIsCheckingSession(false);
+      return;
     }
+
+    // Check if pre-check was completed
+    const precheckCompleted = sessionStorage.getItem(`precheckCompleted_${id}`);
+    if (!precheckCompleted && id && token) {
+      // Pre-check not completed, redirect to pre-check page
+      hasCheckedPrecheckRef.current = true;
+      router.replace(`/precheck/${id}/${token}`);
+      return;
+    }
+
+    hasCheckedPrecheckRef.current = true;
+    setIsCheckingSession(false);
   }, [id, token, router]);
 
   // Record proctoring event

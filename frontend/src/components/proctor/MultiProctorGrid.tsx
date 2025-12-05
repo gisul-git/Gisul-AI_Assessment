@@ -34,32 +34,212 @@ function CandidateCard({
   const screenRef = useRef<HTMLVideoElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
 
-  // Attach webcam stream
+  // Track previous streams to prevent unnecessary updates
+  const prevWebcamStreamRef = useRef<MediaStream | null>(null);
+  const prevScreenStreamRef = useRef<MediaStream | null>(null);
+  const webcamTracksRef = useRef<Set<string>>(new Set());
+  const screenTracksRef = useRef<Set<string>>(new Set());
+  const webcamTrackMonitorRef = useRef<NodeJS.Timeout | null>(null);
+  const screenTrackMonitorRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Attach webcam stream (only update if stream actually changed)
   useEffect(() => {
     if (webcamRef.current && stream.webcamStream) {
-      webcamRef.current.srcObject = stream.webcamStream;
-      // Ensure video plays
-      webcamRef.current.play().catch(err => {
-        console.error("Error playing webcam stream:", err);
-      });
-    } else if (webcamRef.current && !stream.webcamStream) {
+      // Only update if stream is different
+      if (prevWebcamStreamRef.current !== stream.webcamStream) {
+        prevWebcamStreamRef.current = stream.webcamStream;
+        webcamRef.current.srcObject = stream.webcamStream;
+        
+        // Track all tracks in this stream and set up handlers
+        stream.webcamStream.getTracks().forEach(track => {
+          // Set up track handlers only once
+          if (!webcamTracksRef.current.has(track.id)) {
+            webcamTracksRef.current.add(track.id);
+            
+            track.onended = () => {
+              console.log("[MultiProctorGrid] Webcam track ended:", track.id);
+              webcamTracksRef.current.delete(track.id);
+              // Re-attach stream if video element exists and stream still has tracks
+              if (webcamRef.current && stream.webcamStream) {
+                const activeTracks = stream.webcamStream.getTracks().filter(t => t.readyState === 'live');
+                if (activeTracks.length > 0) {
+                  // Stream still has active tracks, ensure it's attached
+                  webcamRef.current.srcObject = stream.webcamStream;
+                  webcamRef.current.play().catch(() => {});
+                }
+              }
+            };
+            
+            track.onmute = () => {
+              console.log("[MultiProctorGrid] Webcam track muted:", track.id);
+            };
+            
+            track.onunmute = () => {
+              console.log("[MultiProctorGrid] Webcam track unmuted:", track.id);
+              // Re-attach when track unmutes
+              if (webcamRef.current && stream.webcamStream) {
+                webcamRef.current.srcObject = stream.webcamStream;
+                webcamRef.current.play().catch(() => {});
+              }
+            };
+          }
+        });
+        
+        // Monitor stream for new tracks
+        if (webcamTrackMonitorRef.current) {
+          clearInterval(webcamTrackMonitorRef.current);
+        }
+        webcamTrackMonitorRef.current = setInterval(() => {
+          if (webcamRef.current && stream.webcamStream) {
+            const webcamStream = stream.webcamStream; // Store in local variable for type safety
+            const currentTracks = new Set(webcamStream.getTracks().map(t => t.id));
+            const trackedTracks = webcamTracksRef.current;
+            
+            // Check for new tracks
+            currentTracks.forEach(trackId => {
+              if (!trackedTracks.has(trackId)) {
+                const track = webcamStream.getTracks().find(t => t.id === trackId);
+                if (track) {
+                  trackedTracks.add(trackId);
+                  // Re-attach stream to video element
+                  if (webcamRef.current && stream.webcamStream) {
+                    webcamRef.current.srcObject = stream.webcamStream;
+                    webcamRef.current.play().catch(() => {});
+                  }
+                }
+              }
+            });
+          }
+        }, 2000); // Check every 2 seconds
+        
+        // Ensure video plays
+        const playPromise = webcamRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(err => {
+            if (err.name !== 'AbortError' && err.name !== 'NotAllowedError') {
+              console.error("[MultiProctorGrid] Error playing webcam stream:", err);
+            }
+          });
+        }
+      }
+    } else if (webcamRef.current && !stream.webcamStream && prevWebcamStreamRef.current) {
       // Clear if stream is removed
+      prevWebcamStreamRef.current = null;
+      webcamTracksRef.current.clear();
+      if (webcamTrackMonitorRef.current) {
+        clearInterval(webcamTrackMonitorRef.current);
+        webcamTrackMonitorRef.current = null;
+      }
       webcamRef.current.srcObject = null;
     }
+    
+    // Cleanup monitor on unmount
+    return () => {
+      if (webcamTrackMonitorRef.current) {
+        clearInterval(webcamTrackMonitorRef.current);
+        webcamTrackMonitorRef.current = null;
+      }
+    };
   }, [stream.webcamStream]);
 
-  // Attach screen stream
+  // Attach screen stream (only update if stream actually changed)
   useEffect(() => {
     if (screenRef.current && stream.screenStream) {
-      screenRef.current.srcObject = stream.screenStream;
-      // Ensure video plays
-      screenRef.current.play().catch(err => {
-        console.error("Error playing screen stream:", err);
-      });
-    } else if (screenRef.current && !stream.screenStream) {
+      // Only update if stream is different
+      if (prevScreenStreamRef.current !== stream.screenStream) {
+        prevScreenStreamRef.current = stream.screenStream;
+        screenRef.current.srcObject = stream.screenStream;
+        
+        // Track all tracks in this stream and set up handlers
+        stream.screenStream.getTracks().forEach(track => {
+          // Set up track handlers only once
+          if (!screenTracksRef.current.has(track.id)) {
+            screenTracksRef.current.add(track.id);
+            
+            track.onended = () => {
+              console.log("[MultiProctorGrid] Screen track ended:", track.id);
+              screenTracksRef.current.delete(track.id);
+              // Re-attach stream if video element exists and stream still has tracks
+              if (screenRef.current && stream.screenStream) {
+                const activeTracks = stream.screenStream.getTracks().filter(t => t.readyState === 'live');
+                if (activeTracks.length > 0) {
+                  // Stream still has active tracks, ensure it's attached
+                  screenRef.current.srcObject = stream.screenStream;
+                  screenRef.current.play().catch(() => {});
+                }
+              }
+            };
+            
+            track.onmute = () => {
+              console.log("[MultiProctorGrid] Screen track muted:", track.id);
+            };
+            
+            track.onunmute = () => {
+              console.log("[MultiProctorGrid] Screen track unmuted:", track.id);
+              // Re-attach when track unmutes
+              if (screenRef.current && stream.screenStream) {
+                screenRef.current.srcObject = stream.screenStream;
+                screenRef.current.play().catch(() => {});
+              }
+            };
+          }
+        });
+        
+        // Monitor stream for new tracks
+        if (screenTrackMonitorRef.current) {
+          clearInterval(screenTrackMonitorRef.current);
+        }
+        screenTrackMonitorRef.current = setInterval(() => {
+          if (screenRef.current && stream.screenStream) {
+            const screenStream = stream.screenStream; // Store in local variable for type safety
+            const currentTracks = new Set(screenStream.getTracks().map(t => t.id));
+            const trackedTracks = screenTracksRef.current;
+            
+            // Check for new tracks
+            currentTracks.forEach(trackId => {
+              if (!trackedTracks.has(trackId)) {
+                const track = screenStream.getTracks().find(t => t.id === trackId);
+                if (track) {
+                  trackedTracks.add(trackId);
+                  // Re-attach stream to video element
+                  if (screenRef.current && stream.screenStream) {
+                    screenRef.current.srcObject = stream.screenStream;
+                    screenRef.current.play().catch(() => {});
+                  }
+                }
+              }
+            });
+          }
+        }, 2000); // Check every 2 seconds
+        
+        // Ensure video plays
+        const playPromise = screenRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(err => {
+            if (err.name !== 'AbortError' && err.name !== 'NotAllowedError') {
+              console.error("[MultiProctorGrid] Error playing screen stream:", err);
+            }
+          });
+        }
+      }
+    } else if (screenRef.current && !stream.screenStream && prevScreenStreamRef.current) {
       // Clear if stream is removed
+      prevScreenStreamRef.current = null;
+      screenTracksRef.current.clear();
+      if (screenTrackMonitorRef.current) {
+        clearInterval(screenTrackMonitorRef.current);
+        screenTrackMonitorRef.current = null;
+      }
       screenRef.current.srcObject = null;
     }
+    
+    // Cleanup monitor on unmount
+    return () => {
+      if (screenTrackMonitorRef.current) {
+        clearInterval(screenTrackMonitorRef.current);
+        screenTrackMonitorRef.current = null;
+      }
+    };
   }, [stream.screenStream]);
 
   const getStatusColor = (state: string) => {
@@ -135,6 +315,11 @@ function CandidateCard({
             }}
           >
             {getStatusText(stream.connectionState)}
+            {stream.connectionState === "connecting" && !stream.webcamStream && !stream.screenStream && (
+              <span style={{ marginLeft: "0.5rem", fontSize: "0.625rem", opacity: 0.7 }}>
+                (Waiting for candidate...)
+              </span>
+            )}
           </span>
         </div>
 
@@ -480,9 +665,9 @@ export function MultiProctorGrid({
             <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
             <path d="M16 3.13a4 4 0 0 1 0 7.75" />
           </svg>
-          <p style={{ marginTop: "1rem", fontSize: "1.125rem" }}>No active candidates</p>
-          <p style={{ color: "#64748b", fontSize: "0.875rem" }}>
-            Candidates will appear here when they start the assessment
+          <p style={{ marginTop: "1rem", fontSize: "1.125rem", fontWeight: 600 }}>No Active Candidates</p>
+          <p style={{ color: "#64748b", fontSize: "0.875rem", marginTop: "0.5rem", textAlign: "center", maxWidth: "400px" }}>
+            No candidates are currently taking the test. The live proctoring dashboard will automatically show candidates when they start their assessment.
           </p>
         </div>
       ) : (
@@ -495,9 +680,9 @@ export function MultiProctorGrid({
         >
           {candidateStreams.map((stream) => (
             <CandidateCard
-              key={stream.sessionId}
+              key={stream.candidateId || stream.sessionId}
               stream={stream}
-              onRefresh={() => onRefreshCandidate?.(stream.sessionId)}
+              onRefresh={() => onRefreshCandidate?.(stream.sessionId || stream.candidateId)}
             />
           ))}
         </div>

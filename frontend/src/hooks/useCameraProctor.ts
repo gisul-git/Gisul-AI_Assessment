@@ -376,16 +376,35 @@ export function useCameraProctor({
   // Record Violation
   // ============================================================================
   
+  // Use refs to track current userId and assessmentId (they may change after hook initialization)
+  const userIdRef = useRef(userId);
+  const assessmentIdRef = useRef(assessmentId);
+  
+  useEffect(() => {
+    userIdRef.current = userId;
+    assessmentIdRef.current = assessmentId;
+  }, [userId, assessmentId]);
+
   const recordViolation = useCallback(async (
     eventType: CameraProctorEventType,
     metadata?: Record<string, unknown>,
     captureImage: boolean = true
   ) => {
-    // Always log to console for debugging
-    console.log(`[CameraProctor] Attempting to record: ${eventType}`, { userId, assessmentId });
+    // Use current values from refs (may have been updated after hook initialization)
+    const currentUserId = userIdRef.current;
+    const currentAssessmentId = assessmentIdRef.current;
     
-    if (!userId || !assessmentId) {
-      console.warn("[CameraProctor] Skipped recording - missing userId or assessmentId", { userId, assessmentId });
+    // Always log to console for debugging
+    console.log(`[CameraProctor] Attempting to record: ${eventType}`, { 
+      userId: currentUserId, 
+      assessmentId: currentAssessmentId 
+    });
+    
+    if (!currentUserId || !currentAssessmentId) {
+      console.warn("[CameraProctor] Skipped recording - missing userId or assessmentId", { 
+        userId: currentUserId, 
+        assessmentId: currentAssessmentId 
+      });
       return;
     }
     
@@ -399,18 +418,18 @@ export function useCameraProctor({
     const violation: CameraProctorViolation = {
       eventType,
       timestamp: new Date().toISOString(),
-      assessmentId,
-      userId,
+      assessmentId: currentAssessmentId,
+      userId: currentUserId,
       metadata,
       snapshotBase64,
     };
-    
+
     setLastViolation(violation);
-    
+
     console.log(`[CameraProctor] Recording ${eventType} violation:`, { 
       eventType, 
-      userId, 
-      assessmentId,
+      userId: currentUserId, 
+      assessmentId: currentAssessmentId,
       hasSnapshot: !!snapshotBase64,
       metadata 
     });

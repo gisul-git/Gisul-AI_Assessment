@@ -1,12 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/router'
+import { useSession } from 'next-auth/react'
 import { GetServerSideProps } from 'next'
 import { requireAuth } from '../../../lib/auth'
 import Link from 'next/link'
 import axios from 'axios'
-import { ArrowLeft, AlertTriangle, Clock } from 'lucide-react'
+import { ArrowLeft, AlertTriangle, Clock, Video } from 'lucide-react'
+import { MultiProctorGrid } from '@/components/proctor/MultiProctorGrid'
+import { useMultiLiveProctorAdmin } from '@/hooks/useMultiLiveProctorAdmin'
 
 interface AnswerLog {
   answer: string
@@ -45,6 +48,7 @@ interface Candidate {
 
 export default function AnalyticsPage() {
   const router = useRouter()
+  const { data: session } = useSession()
   const { id: assessmentId, candidate: candidateEmail } = router.query
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [selectedCandidate, setSelectedCandidate] = useState<string | null>(null)
@@ -56,6 +60,96 @@ export default function AnalyticsPage() {
   const [eventTypeLabels, setEventTypeLabels] = useState<Record<string, string>>({})
   const [loadingProctorLogs, setLoadingProctorLogs] = useState(false)
   const [showProctorLogs, setShowProctorLogs] = useState(false)
+  const [showLiveProctor, setShowLiveProctor] = useState(false)
+  const [hasActiveSessions, setHasActiveSessions] = useState(false)
+  const isMonitoringRef = useRef(false)
+  
+  // Multi-proctor hook for viewing all candidates
+  const {
+    candidateStreams,
+    activeCandidates,
+    isLoading: isProctorLoading,
+    startMonitoring,
+    stopMonitoring,
+    refreshCandidate,
+  } = useMultiLiveProctorAdmin({
+    assessmentId: (assessmentId as string) || "",
+    adminId: (session as any)?.user?.id || (session as any)?.user?.email || 'admin',
+    onError: (error) => {
+      console.error('Multi-proctor error:', error)
+    },
+    debugMode: true,
+  })
+  
+  // Check for active sessions only when live proctor panel is open
+  // Use activeCandidates from the hook instead of polling separately
+  useEffect(() => {
+    if (showLiveProctor && activeCandidates) {
+      setHasActiveSessions(activeCandidates.length > 0)
+    }
+  }, [activeCandidates, showLiveProctor])
+  
+  // Check for active sessions ONLY when button is clicked (not on mount or hover)
+  const checkActiveSessionsOnClick = async (): Promise<boolean> => {
+    if (!assessmentId || typeof assessmentId !== 'string') return false
+    
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+      const res = await fetch(`${API_URL}/api/proctor/live/all-sessions/${assessmentId}`)
+      const data = await res.json()
+      
+      if (data.success && data.data?.sessions) {
+        const activeSessions = data.data.sessions.filter((s: any) => 
+          s.status !== "ended" && s.status !== "completed"
+        )
+        const hasActive = activeSessions.length > 0
+        setHasActiveSessions(hasActive)
+        return hasActive
+      } else {
+        setHasActiveSessions(false)
+        return false
+      }
+    } catch (error) {
+      console.error('Error checking active sessions:', error)
+      setHasActiveSessions(false)
+      return false
+    }
+  }
+  
+  
+  // Start monitoring when live proctor panel opens, stop when it closes
+  // Note: stopMonitoring() only closes local peer connections, it does NOT end sessions on backend
+  // This means when admin reopens, it will reconnect to existing sessions without requiring candidate re-acceptance
+  useEffect(() => {
+    // Only run if assessmentId is valid
+    if (!assessmentId || typeof assessmentId !== 'string') return
+    
+    // Start if panel is open
+    if (showLiveProctor) {
+      if (!isMonitoringRef.current) {
+        console.log('[Live Proctor] Starting monitoring - will reuse existing sessions (no re-acceptance needed)...')
+        isMonitoringRef.current = true
+        startMonitoring()
+      }
+    } else {
+      // Stop if panel is closed
+      if (isMonitoringRef.current) {
+        console.log('[Live Proctor] Panel closed, stopping monitoring...')
+        isMonitoringRef.current = false
+        stopMonitoring()
+      }
+    }
+    
+    // Cleanup function - always stop monitoring when component unmounts
+    return () => {
+      if (isMonitoringRef.current) {
+        console.log('[Live Proctor] Stopping monitoring (cleanup on unmount)...')
+        isMonitoringRef.current = false
+        stopMonitoring()
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showLiveProctor, assessmentId]) // Removed startMonitoring and stopMonitoring from deps to prevent re-runs
 
   const fetchAnalytics = async (email: string, name: string) => {
     if (!assessmentId || typeof assessmentId !== 'string') return
@@ -100,12 +194,18 @@ export default function AnalyticsPage() {
     }
   }
 
+  const hasFetchedRef = useRef<string | null>(null)
+  
   useEffect(() => {
     if (!assessmentId || typeof assessmentId !== 'string') return
+    
+    // Only fetch if assessmentId changed (not on every render)
+    if (hasFetchedRef.current === assessmentId) return
 
     const fetchData = async () => {
       try {
         setLoading(true)
+        hasFetchedRef.current = assessmentId
         
         // Fetch assessment details
         const assessmentResponse = await axios.get(`/api/assessments/get-questions?assessmentId=${assessmentId}`)
@@ -132,6 +232,7 @@ export default function AnalyticsPage() {
       } catch (error) {
         console.error('Error fetching data:', error)
         alert('Failed to load data')
+        hasFetchedRef.current = null // Reset on error to allow retry
       } finally {
         setLoading(false)
       }
@@ -344,9 +445,38 @@ export default function AnalyticsPage() {
                   padding: "1.5rem",
                   backgroundColor: "#ffffff",
                 }}>
-                  <h2 style={{ fontSize: "1.25rem", fontWeight: 600, marginBottom: "1rem" }}>
-                    Overall Assessment Performance
-                  </h2>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+                    <h2 style={{ fontSize: "1.25rem", fontWeight: 600, margin: 0 }}>
+                      Overall Assessment Performance
+                    </h2>
+                    {assessmentId && typeof assessmentId === 'string' && candidates.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={async () => {
+                          // Check for active sessions ONLY when button is clicked
+                          const hasActive = await checkActiveSessionsOnClick()
+                          if (hasActive) {
+                            setShowLiveProctor(true)
+                          } else {
+                            alert("No active candidates are currently taking the test. The live proctoring dashboard will be available when candidates start their assessment.")
+                          }
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                          padding: "0.75rem 1.5rem",
+                          fontSize: "0.875rem",
+                          marginTop: 0,
+                        }}
+                        title="View live proctoring for active candidates"
+                      >
+                        <Video style={{ width: "16px", height: "16px" }} />
+                        Live Proctoring
+                      </button>
+                    )}
+                  </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem", marginBottom: "1rem" }}>
                     <div>
                       <div style={{ fontSize: "0.875rem", color: "#64748b", marginBottom: "0.25rem" }}>Total Candidates</div>
@@ -659,9 +789,13 @@ export default function AnalyticsPage() {
                             <div style={{ marginTop: "0.75rem" }}>
                               <div style={{ fontSize: "0.75rem", color: "#64748b", marginBottom: "0.5rem" }}>Evidence Snapshot:</div>
                               <img
-                                src={`data:image/png;base64,${log.snapshotBase64}`}
+                                src={log.snapshotBase64.startsWith("data:") ? log.snapshotBase64 : `data:image/png;base64,${log.snapshotBase64}`}
                                 alt="Violation snapshot"
                                 style={{ maxWidth: "100%", height: "auto", borderRadius: "0.375rem", border: "1px solid #e2e8f0", maxHeight: "200px" }}
+                                onError={(e) => {
+                                  console.error("Error loading snapshot image:", e);
+                                  (e.target as HTMLImageElement).style.display = "none";
+                                }}
                               />
                             </div>
                           )}
@@ -857,6 +991,81 @@ export default function AnalyticsPage() {
           </div>
         </div>
       </div>
+
+      {/* Multi Live Proctoring Panel */}
+      {showLiveProctor && assessmentId && typeof assessmentId === 'string' && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.95)",
+            zIndex: 9999,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {/* Header */}
+          <div
+            style={{
+              padding: "1rem 1.5rem",
+              backgroundColor: "#1e293b",
+              borderBottom: "1px solid #334155",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+              <Video style={{ width: "24px", height: "24px", color: "#10b981" }} />
+              <div>
+                <h2 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 700, color: "#ffffff" }}>
+                  Live Proctoring Dashboard
+                </h2>
+                <p style={{ margin: "0.25rem 0 0", fontSize: "0.875rem", color: "#94a3b8" }}>
+                  Monitoring {candidateStreams.length} active candidate{candidateStreams.length !== 1 ? 's' : ''}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                console.log('[Live Proctor] Close button clicked, stopping monitoring...')
+                isMonitoringRef.current = false
+                stopMonitoring()
+                setShowLiveProctor(false)
+              }}
+              style={{
+                padding: "0.75rem 1.5rem",
+                backgroundColor: "#ef4444",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "0.5rem",
+                fontSize: "0.875rem",
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+              }}
+            >
+              <span>✕</span>
+              Close
+            </button>
+          </div>
+          
+          {/* Multi-Proctor Grid */}
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <MultiProctorGrid
+              candidateStreams={candidateStreams}
+              onRefreshCandidate={refreshCandidate}
+              isLoading={isProctorLoading}
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -6,7 +6,7 @@ import { GetServerSideProps } from 'next'
 import { requireAuth } from '../../../lib/auth'
 import Link from 'next/link'
 import axios from 'axios'
-import { ArrowLeft, Mail, CheckCircle, Clock } from 'lucide-react'
+import { ArrowLeft, Mail, CheckCircle, Clock, BarChart3 } from 'lucide-react'
 
 interface Candidate {
   email: string
@@ -106,13 +106,32 @@ export default function CandidatesPage() {
           </button>
         </div>
 
-        <div style={{ marginBottom: "2rem" }}>
-          <h1 style={{ fontSize: "2rem", fontWeight: 700, marginBottom: "0.5rem" }}>
-            Candidates
-          </h1>
-          <p style={{ color: "#64748b", margin: 0 }}>
-            {assessment?.assessment?.title || 'Assessment'} - View all candidates
-          </p>
+        <div style={{ marginBottom: "2rem", display: "flex", justifyContent: "space-between", alignItems: "start" }}>
+          <div>
+            <h1 style={{ fontSize: "2rem", fontWeight: 700, marginBottom: "0.5rem" }}>
+              Candidates
+            </h1>
+            <p style={{ color: "#64748b", margin: 0 }}>
+              {assessment?.assessment?.title || 'Assessment'} - View all candidates
+            </p>
+          </div>
+          <Link href={`/assessments/${assessmentId}/analytics`}>
+            <button
+              type="button"
+              className="btn-primary"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                padding: "0.75rem 1.5rem",
+                fontSize: "0.875rem",
+                marginTop: 0,
+              }}
+            >
+              <BarChart3 style={{ width: "16px", height: "16px" }} />
+              Analytics
+            </button>
+          </Link>
         </div>
 
         {candidates.length === 0 ? (

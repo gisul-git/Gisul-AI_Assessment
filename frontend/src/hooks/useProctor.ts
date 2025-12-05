@@ -106,15 +106,31 @@ export function useProctor({
     return true;
   }, [debugLog]);
 
+  // Use refs to track current userId and assessmentId (they may change after hook initialization)
+  const userIdRef = useRef(userId);
+  const assessmentIdRef = useRef(assessmentId);
+  
+  useEffect(() => {
+    userIdRef.current = userId;
+    assessmentIdRef.current = assessmentId;
+  }, [userId, assessmentId]);
+
   // Record a violation
   const recordViolation = useCallback(async (
     eventType: ProctorEventType,
     metadata?: Record<string, unknown>,
     snapshotBase64?: string
   ) => {
+    // Use current values from refs (may have been updated after hook initialization)
+    const currentUserId = userIdRef.current;
+    const currentAssessmentId = assessmentIdRef.current;
+    
     // Skip if userId or assessmentId not provided
-    if (!userId || !assessmentId) {
-      debugLog("Skipped recording - missing userId or assessmentId");
+    if (!currentUserId || !currentAssessmentId) {
+      debugLog("Skipped recording - missing userId or assessmentId", { 
+        userId: currentUserId, 
+        assessmentId: currentAssessmentId 
+      });
       return;
     }
 
@@ -126,8 +142,8 @@ export function useProctor({
     const violation: ProctorViolation = {
       eventType,
       timestamp: new Date().toISOString(),
-      assessmentId,
-      userId,
+      assessmentId: currentAssessmentId,
+      userId: currentUserId,
       metadata,
       ...(snapshotBase64 && { snapshotBase64 }),
     };
@@ -138,7 +154,11 @@ export function useProctor({
 
     // Log
     debugLog(`Event recorded: ${eventType}`, violation);
-    console.log(`[Proctor] ${eventType} violation recorded:`, { eventType, userId, assessmentId });
+    console.log(`[Proctor] ${eventType} violation recorded:`, { 
+      eventType, 
+      userId: currentUserId, 
+      assessmentId: currentAssessmentId 
+    });
 
     // Notify callback
     if (onViolation) {
