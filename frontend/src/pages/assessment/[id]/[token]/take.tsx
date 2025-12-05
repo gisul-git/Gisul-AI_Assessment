@@ -1039,7 +1039,16 @@ export default function CandidateAssessmentPage() {
       // Initialize code if not already set
       if (!code[currentQuestionIndex]) {
         const starterCode = currentQuestion.coding_data?.starter_code || currentQuestion.starter_code || "";
-        setCode(prev => ({ ...prev, [currentQuestionIndex]: starterCode || "" }));
+        
+        // Handle both string and Record<string, string> formats
+        let initialCodeValue = "";
+        if (typeof starterCode === "string") {
+          initialCodeValue = starterCode || "";
+        } else if (starterCode && typeof starterCode === "object") {
+          initialCodeValue = starterCode[langName] || Object.values(starterCode)[0] || "";
+        }
+        
+        setCode(prev => ({ ...prev, [currentQuestionIndex]: initialCodeValue }));
       }
     }
   }, [currentQuestionIndex, questions]);

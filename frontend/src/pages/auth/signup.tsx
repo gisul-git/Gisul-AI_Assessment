@@ -133,7 +133,6 @@ export default function SignupPage({ providers }: SignupPageProps) {
     setTimeout(() => setMessage(null), 6000);
   };
 
-<<<<<<< Updated upstream
   // Check for OAuth errors in URL (from NextAuth callback)
   useEffect(() => {
     const error = router.query.error as string | undefined;
@@ -163,12 +162,11 @@ export default function SignupPage({ providers }: SignupPageProps) {
       router.replace("/auth/signup", undefined, { shallow: true });
     }
   }, [router.query.error, router]);
-=======
+
   // Set country based on default country code on mount
   useEffect(() => {
     setCountry(getCountryNameFromCode(phoneCountryCode));
   }, []);
->>>>>>> Stashed changes
 
   // Countdown timer effect
   useEffect(() => {

@@ -218,3 +218,9 @@ export const sortedCountryCodes = [...countryCodes].sort((a, b) =>
   a.country.localeCompare(b.country)
 );
 
+// Get country name from country code
+export function getCountryNameFromCode(code: string): string {
+  const country = countryCodes.find(c => c.code === code);
+  return country?.country || code;
+}
+
