@@ -4066,7 +4066,6 @@ export default function CreateNewAssessmentPage() {
                 >
                   Back
                 </button>
-                {isEditMode && (
                 <button
                   type="button"
                   onClick={() => {
@@ -4098,7 +4097,6 @@ export default function CreateNewAssessmentPage() {
                 >
                   Next
                 </button>
-                )}
               </div>
             </div>
           )}

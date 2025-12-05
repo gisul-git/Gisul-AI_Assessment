@@ -186,8 +186,8 @@ export const authOptions: NextAuthOptions = {
         token.id = (user as BackendUser).id ?? token.sub;
         token.role = (user as BackendUser).role ?? token.role;
         token.organization = (user as BackendUser).organization ?? token.organization;
-        token.phone = (user as BackendUser).phone ?? token.phone;
-        token.country = (user as BackendUser).country ?? token.country;
+        token.phone = ((user as any) as BackendUser).phone ?? token.phone;
+        token.country = ((user as any) as BackendUser).country ?? token.country;
         token.backendToken = (user as BackendUser).token ?? token.backendToken;
         token.refreshToken = (user as BackendUser).refreshToken ?? token.refreshToken;
       }
@@ -213,10 +213,12 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
     async redirect({ url, baseUrl }) {
-      // Prevent redirecting authenticated users to home page
-      // Always redirect to dashboard instead to avoid flash of landing page
+      // Handle role-based redirects
+      // If redirecting to home page or dashboard, we'll let the pages handle it
+      // This prevents interfering with explicit redirects from signin
       if (url === `${baseUrl}/` || url === baseUrl) {
-        return `${baseUrl}/dashboard`;
+        // If going to home, let home page handle redirect based on role
+        return url;
       }
       
       // For other URLs, allow them through
