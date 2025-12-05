@@ -43,22 +43,35 @@ export function EditorToolbar({
   running = false,
   submitting = false
 }: EditorToolbarProps) {
+  // Hide language dropdown if only one language (assessment context - language is fixed)
+  const showLanguageDropdown = languages.length > 1;
+  
   return (
     <div className="px-4 py-3 border-b border-slate-700 bg-slate-900 flex items-center justify-between">
-      <div className="flex items-center gap-3">
-        <label className="text-sm font-medium text-slate-300">Language:</label>
-        <Select
-          value={language}
-          onChange={(e) => onLanguageChange(e.target.value)}
-          className="w-40 bg-slate-800 border-slate-700 text-white focus:ring-2 focus:ring-blue-500"
-        >
-          {languages.map((lang) => (
-            <option key={lang} value={lang}>
-              {getLanguageDisplayName(lang)}
-            </option>
-          ))}
-        </Select>
-      </div>
+      {showLanguageDropdown ? (
+        <div className="flex items-center gap-3">
+          <label className="text-sm font-medium text-slate-300">Language:</label>
+          <Select
+            value={language}
+            onChange={(e) => onLanguageChange(e.target.value)}
+            className="w-40 bg-slate-800 border-slate-700 text-white focus:ring-2 focus:ring-blue-500"
+          >
+            {languages.map((lang) => (
+              <option key={lang} value={lang}>
+                {getLanguageDisplayName(lang)}
+              </option>
+            ))}
+          </Select>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3">
+          <label className="text-sm font-medium text-slate-300">Language:</label>
+          <span className="text-sm text-slate-400 px-3 py-1 bg-slate-800 rounded border border-slate-700">
+            {getLanguageDisplayName(language)}
+          </span>
+          <span className="text-xs text-slate-500">(Fixed for this question)</span>
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <Button
           size="sm"

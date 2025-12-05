@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, Body, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, Body, UploadFile, File, Depends
 from typing import List, Dict, Any, Optional
 from bson import ObjectId
 from datetime import datetime
@@ -16,25 +16,119 @@ from app.dsa.routers.assessment import (
     format_public_result,
     format_hidden_result_for_admin,
 )
+from app.core.dependencies import get_current_user, require_editor
 
 logger = logging.getLogger("backend")
 
 router = APIRouter()
 
-@router.post("/", response_model=dict)
-async def create_test(test: TestCreate):
+@router.get("/debug/user-info", response_model=dict)
+async def debug_user_info(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """
-    Create a new test (no auth required)
+    Debug endpoint to verify authentication and user ID extraction
     """
     db = get_database()
+    user_id = current_user.get("id") or current_user.get("_id")
+    user_id_str = str(user_id).strip() if user_id else None
+    
+    # Check how many tests exist for this user
+    user_tests_count = 0
+    all_tests_count = 0
+    tests_without_created_by = 0
+    
+    if user_id_str:
+        # Count tests for this user
+        user_tests_count = await db.tests.count_documents({"created_by": user_id_str})
+        
+        # Count all tests
+        all_tests_count = await db.tests.count_documents({})
+        
+        # Count tests without created_by
+        tests_without_created_by = await db.tests.count_documents({"created_by": {"$exists": False}})
+        
+        # Get a sample of all tests to see created_by values
+        sample_tests = await db.tests.find({}).limit(5).to_list(length=5)
+        sample_created_by_values = [{"id": str(t.get("_id")), "created_by": t.get("created_by"), "title": t.get("title", "Unknown")} for t in sample_tests]
+    
+    return {
+        "user_id": user_id_str,
+        "user_id_type": type(user_id).__name__ if user_id else None,
+        "current_user_keys": list(current_user.keys()),
+        "current_user_id": current_user.get("id"),
+        "current_user__id": current_user.get("_id"),
+        "current_user_email": current_user.get("email"),
+        "database_stats": {
+            "user_tests_count": user_tests_count,
+            "all_tests_count": all_tests_count,
+            "tests_without_created_by": tests_without_created_by,
+            "sample_tests": sample_created_by_values if user_id_str else []
+        },
+        "message": "Authentication working correctly"
+    }
+
+@router.post("/", response_model=dict)
+async def create_test(
+    test: TestCreate,
+    current_user: Dict[str, Any] = Depends(require_editor)
+):
+    """
+    Create a new test (requires authentication)
+    Validates that all question_ids belong to the current user
+    """
+    db = get_database()
+    user_id = current_user.get("id") or current_user.get("_id")
+    if not user_id:
+        logger.error(f"[create_test] Invalid user ID in current_user: {list(current_user.keys())}")
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    user_id = str(user_id).strip()  # Ensure no whitespace and consistent format
+    
+    logger.info(f"[create_test] User ID extracted: '{user_id}' (type: {type(user_id).__name__})")
+    
+    # Validate that all questions belong to the current user
+    if test.question_ids:
+        question_ids = [ObjectId(qid) if ObjectId.is_valid(qid) else None for qid in test.question_ids]
+        question_ids = [qid for qid in question_ids if qid is not None]
+        
+        if question_ids:
+            questions = await db.questions.find({"_id": {"$in": question_ids}}).to_list(length=len(question_ids))
+            # Check if all questions exist and belong to the user
+            found_question_ids = {str(q["_id"]) for q in questions}
+            requested_question_ids = {str(qid) for qid in question_ids}
+            
+            if found_question_ids != requested_question_ids:
+                raise HTTPException(status_code=400, detail="Some questions not found")
+            
+            # Verify ownership - normalize both sides for comparison
+            for question in questions:
+                q_created_by = question.get("created_by")
+                if not q_created_by or str(q_created_by).strip() != user_id.strip():
+                    raise HTTPException(status_code=403, detail=f"Question {question.get('title', 'Unknown')} does not belong to you")
+    
     test_dict = test.model_dump()
-    test_dict["created_by"] = "admin"
+    # Store the actual user ID who created the test - CRITICAL: Must be string, no whitespace
+    # user_id is already normalized above
+    test_dict["created_by"] = user_id
     test_dict["is_active"] = True
     test_dict["is_published"] = False  # Tests start as unpublished
     test_dict["invited_users"] = []  # Will be populated via add candidate
     test_dict["created_at"] = datetime.utcnow()  # Set creation timestamp
     
+    logger.info(f"[create_test] Creating test with created_by='{user_id}' (type: {type(user_id).__name__}), title={test_dict.get('title')}")
+    logger.info(f"[create_test] Current user data: id={current_user.get('id')}, _id={current_user.get('_id')}, email={current_user.get('email')}")
+    
     result = await db.tests.insert_one(test_dict)
+    
+    # Verify the test was created with correct created_by
+    created_test_check = await db.tests.find_one({"_id": result.inserted_id})
+    if created_test_check:
+        actual_created_by = created_test_check.get("created_by")
+        if actual_created_by != user_id:
+            logger.error(f"[create_test] SECURITY ISSUE: Test created with created_by='{actual_created_by}' but expected '{user_id}'")
+            logger.error(f"[create_test] Test ID: {result.inserted_id}, Title: {test_dict.get('title')}")
+        else:
+            logger.info(f"[create_test] Test created successfully with created_by='{actual_created_by}'")
     
     # Fetch the created test
     created_test = await db.tests.find_one({"_id": result.inserted_id})
@@ -68,20 +162,170 @@ async def create_test(test: TestCreate):
     test_dict["end_time"] = test_dict["end_time"].isoformat() if isinstance(test_dict.get("end_time"), datetime) else test_dict.get("end_time")
     return test_dict
 
+# Handle both with and without trailing slash to avoid 307 redirects
+@router.get("", response_model=List[dict], include_in_schema=False)
+async def get_tests_no_slash(
+    active_only: bool = False,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Redirect handler for GET /api/dsa/tests (without trailing slash)"""
+    return await get_tests(active_only, current_user)
+
 @router.get("/", response_model=List[dict])
-async def get_tests(active_only: bool = False):
+async def get_tests(
+    active_only: bool = False,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """
-    Get all tests (no auth required - for admin panel)
+    Get tests for the current user (requires authentication)
+    Only returns tests created by the current user
+    
+    SECURITY: This endpoint MUST only return tests where created_by matches the authenticated user's ID
     """
+    # CRITICAL SECURITY CHECK: Verify authentication
+    if not current_user:
+        logger.error("[get_tests] CRITICAL: current_user is None or empty - authentication failed")
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
     db = get_database()
-    query = {}
+    # Filter tests by the current user - STRICT: only return tests with created_by matching current user
+    user_id = current_user.get("id") or current_user.get("_id")
+    if not user_id:
+        logger.error(f"[get_tests] CRITICAL: Invalid user ID in current_user. Keys: {list(current_user.keys())}")
+        logger.error(f"[get_tests] CRITICAL: current_user content: {current_user}")
+        raise HTTPException(status_code=400, detail="Invalid user ID - authentication failed")
+    user_id = str(user_id).strip()  # Ensure no whitespace
+    
+    # CRITICAL: Log the user_id being used for filtering
+    # Using print() as well to ensure visibility in console
+    print(f"[get_tests] SECURITY: Filtering tests for authenticated user_id: '{user_id}'")
+    logger.info(f"[get_tests] SECURITY: Filtering tests for authenticated user_id: '{user_id}'")
+    
+    print(f"[get_tests] Fetching tests for user_id: '{user_id}' (type: {type(user_id).__name__})")
+    logger.info(f"[get_tests] Fetching tests for user_id: '{user_id}' (type: {type(user_id).__name__})")
+    print(f"[get_tests] Current user data: id={current_user.get('id')}, _id={current_user.get('_id')}, email={current_user.get('email')}")
+    logger.info(f"[get_tests] Current user data: id={current_user.get('id')}, _id={current_user.get('_id')}, email={current_user.get('email')}")
+    
+    # ABSOLUTE SECURITY: Use explicit $and with $exists to ensure field exists
+    # This is the STRICTEST possible query - will NEVER match documents without created_by
+    # CRITICAL: Normalize user_id to string for comparison (handles ObjectId vs string)
+    user_id_normalized = str(user_id).strip()
+    
+    # Build strict query - exact string match (we store created_by as string)
+    base_conditions = [
+        {"created_by": {"$exists": True}},
+        {"created_by": {"$ne": None}},
+        {"created_by": {"$ne": ""}},
+        {"created_by": user_id_normalized}  # Exact string match
+    ]
     
     if active_only:
-        query["is_active"] = True
-        query["start_time"] = {"$lte": datetime.utcnow()}
-        query["end_time"] = {"$gte": datetime.utcnow()}
+        base_conditions.append({"is_active": True})
+        base_conditions.append({"start_time": {"$lte": datetime.utcnow()}})
+        base_conditions.append({"end_time": {"$gte": datetime.utcnow()}})
     
-    tests = await db.tests.find(query).sort("start_time", -1).to_list(length=100)
+    query = {"$and": base_conditions}
+    
+    print(f"[get_tests] STRICT MongoDB query: {query}")
+    logger.info(f"[get_tests] STRICT MongoDB query: {query}")
+    print(f"[get_tests] Query will ONLY match tests where created_by exists, is not null, is not empty, and equals '{user_id_normalized}'")
+    logger.info(f"[get_tests] Query will ONLY match tests where created_by exists, is not null, is not empty, and equals '{user_id_normalized}'")
+    print(f"[get_tests] User ID type: {type(user_id).__name__}, normalized: '{user_id_normalized}'")
+    logger.info(f"[get_tests] User ID type: {type(user_id).__name__}, normalized: '{user_id_normalized}'")
+    
+    # DEBUG: Check what tests exist in database (for debugging)
+    all_tests_sample = await db.tests.find({}).limit(5).to_list(length=5)
+    logger.info(f"[get_tests] DEBUG: Sample of ALL tests in DB (first 5):")
+    for t in all_tests_sample:
+        logger.info(f"[get_tests] DEBUG: Test ID={str(t.get('_id'))}, created_by={t.get('created_by')}, title={t.get('title', 'Unknown')}")
+    
+    # Execute query with explicit security - CRITICAL: This query MUST filter by created_by
+    logger.info(f"[get_tests] EXECUTING MongoDB query: {query}")
+    logger.info(f"[get_tests] Query conditions: created_by must exist, not be None, not be empty, and equal '{user_id_normalized}'")
+    
+    # CRITICAL: Execute query - this MUST filter by created_by
+    tests = await db.tests.find(query).sort("created_at", -1).to_list(length=100)
+    
+    print(f"[get_tests] MongoDB returned {len(tests)} tests for user_id: '{user_id_normalized}'")
+    logger.info(f"[get_tests] MongoDB returned {len(tests)} tests for user_id: '{user_id_normalized}'")
+    print(f"[get_tests] Query executed successfully. Filtering by created_by='{user_id_normalized}'")
+    logger.info(f"[get_tests] Query executed successfully. Filtering by created_by='{user_id_normalized}'")
+    
+    # VERIFY: Log each test's created_by to ensure they all match
+    for idx, test in enumerate(tests):
+        test_created_by = test.get("created_by")
+        logger.info(f"[get_tests] Test {idx+1}: ID={str(test.get('_id'))}, created_by='{test_created_by}', matches_user={str(test_created_by).strip() == user_id_normalized}")
+    
+    # CRITICAL SECURITY CHECK: Additional client-side filter as defense in depth
+    # This is a FINAL safety net - filter out ANY test that doesn't match exactly
+    tests_before_filter = len(tests)
+    filtered_tests = []
+    for test in tests:
+        test_created_by = test.get("created_by")
+        test_id = str(test.get("_id", ""))
+        test_title = test.get("title", "Unknown")
+        
+        # ABSOLUTE STRICT CHECK: Reject if created_by is missing, null, empty, or doesn't match
+        if test_created_by is None:
+            logger.error(f"[get_tests] SECURITY VIOLATION: Test {test_id} ({test_title}) has NULL created_by - REJECTING")
+            continue
+        
+        if test_created_by == "":
+            logger.error(f"[get_tests] SECURITY VIOLATION: Test {test_id} ({test_title}) has EMPTY created_by - REJECTING")
+            continue
+        
+        # Normalize both sides to string for comparison (handles ObjectId vs string mismatch)
+        test_created_by_str = str(test_created_by).strip()
+        # Use the already normalized user_id from above
+        if test_created_by_str != user_id_normalized:
+            logger.error(f"[get_tests] SECURITY VIOLATION: Test {test_id} ({test_title}) created_by='{test_created_by_str}' != user_id='{user_id_normalized}' - REJECTING")
+            continue
+        
+        # Only add if it passes all checks
+        filtered_tests.append(test)
+    
+    tests = filtered_tests
+    
+    if tests_before_filter != len(tests):
+        logger.error(f"[get_tests] SECURITY: Filtered out {tests_before_filter - len(tests)} tests that didn't match user_id - this should not happen if query is correct")
+    
+    # Final verification log - CRITICAL: Verify ALL tests belong to this user
+    logger.info(f"[get_tests] Final check: Returning {len(tests)} tests for user_id: '{user_id_normalized}'")
+    
+    # ABSOLUTE FINAL CHECK: Verify every single test belongs to this user (defense in depth)
+    # Create a new list with only tests that match (safe iteration)
+    final_tests = []
+    security_violations = 0
+    for test in tests:
+        test_created_by_raw = test.get("created_by")
+        test_created_by = str(test_created_by_raw).strip() if test_created_by_raw is not None else ""
+        test_id = str(test.get("_id", ""))
+        test_title = test.get("title", "Unknown")
+        
+        if test_created_by != user_id_normalized:
+            security_violations += 1
+            logger.error(f"[get_tests] CRITICAL SECURITY ERROR: Test {test_id} ({test_title}) has created_by='{test_created_by}' but user_id='{user_id_normalized}' - REJECTING")
+            logger.error(f"[get_tests] SECURITY: This should NEVER happen if query is correct. Test will be removed from response.")
+            continue
+        final_tests.append(test)
+    
+    tests = final_tests
+    
+    if security_violations > 0:
+        logger.error(f"[get_tests] CRITICAL: Removed {security_violations} tests that didn't belong to user '{user_id_normalized}' - SECURITY BREACH PREVENTED")
+        logger.error(f"[get_tests] This indicates the MongoDB query may have failed. Original query was: {query}")
+    
+    print(f"[get_tests] After final security check: Returning {len(tests)} tests for user_id: '{user_id_normalized}'")
+    logger.info(f"[get_tests] After final security check: Returning {len(tests)} tests for user_id: '{user_id_normalized}'")
+    
+    # ABSOLUTE FINAL VERIFICATION: Log every test being returned
+    print(f"[get_tests] SECURITY VERIFICATION: Tests being returned:")
+    logger.info(f"[get_tests] SECURITY VERIFICATION: Tests being returned:")
+    for idx, test in enumerate(tests):
+        test_info = f"[get_tests]   Test {idx+1}: ID={str(test.get('_id'))}, created_by='{test.get('created_by')}', title='{test.get('title', 'Unknown')}'"
+        print(test_info)
+        logger.info(test_info)
+    
     result = []
     for test in tests:
         # Convert ObjectId to string and ensure all fields are JSON serializable
@@ -97,6 +341,7 @@ async def get_tests(active_only: bool = False):
             "invited_users": test.get("invited_users", []),
             "question_ids": [str(qid) if isinstance(qid, ObjectId) else qid for qid in test.get("question_ids", [])],
             "test_token": test.get("test_token"),
+            "created_by": str(test.get("created_by", "")),  # CRITICAL: Include for client-side verification
         }
         # Add created_at if it exists
         if "created_at" in test and test.get("created_at"):
@@ -108,17 +353,43 @@ async def get_tests(active_only: bool = False):
     return result
 
 @router.get("/{test_id}", response_model=dict)
-async def get_test(test_id: str):
+async def get_test(
+    test_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """
-    Get test details (no auth required)
+    Get test details (requires authentication and ownership)
+    Only returns tests created by the current user
     """
     db = get_database()
     if not ObjectId.is_valid(test_id):
         raise HTTPException(status_code=400, detail="Invalid test ID")
     
+    # Get current user ID
+    user_id = current_user.get("id") or current_user.get("_id")
+    if not user_id:
+        logger.error(f"[get_test] Invalid user ID in current_user: {list(current_user.keys())}")
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    user_id = str(user_id).strip()
+    
+    logger.info(f"[get_test] Fetching test {test_id} for user_id: '{user_id}'")
+    
+    # Find test and verify ownership
     test = await db.tests.find_one({"_id": ObjectId(test_id)})
     if not test:
         raise HTTPException(status_code=404, detail="Test not found")
+    
+    # CRITICAL SECURITY CHECK: Verify ownership
+    test_created_by = test.get("created_by")
+    if not test_created_by:
+        logger.warning(f"[get_test] SECURITY: Test {test_id} has no created_by field")
+        raise HTTPException(status_code=403, detail="You don't have permission to view this test")
+    
+    if str(test_created_by).strip() != user_id.strip():
+        logger.error(f"[get_test] SECURITY ISSUE: User {user_id} attempted to access test {test_id} created by {test_created_by}")
+        raise HTTPException(status_code=403, detail="You don't have permission to view this test")
+    
+    logger.info(f"[get_test] Test {test_id} access granted to user {user_id}")
     
     # Convert ObjectId to string and ensure all fields are JSON serializable
     test_dict = {
@@ -138,18 +409,56 @@ async def get_test(test_id: str):
     return test_dict
 
 @router.put("/{test_id}", response_model=dict)
-async def update_test(test_id: str, test: TestCreate):
+async def update_test(
+    test_id: str,
+    test: TestCreate,
+    current_user: Dict[str, Any] = Depends(require_editor)
+):
     """
-    Update an existing test (no auth required)
+    Update an existing test (requires authentication and ownership)
+    Validates that all question_ids belong to the current user
     """
     db = get_database()
     if not ObjectId.is_valid(test_id):
         raise HTTPException(status_code=400, detail="Invalid test ID")
     
-    # Check if test exists
+    # Check if test exists and belongs to the current user
+    user_id = current_user.get("id") or current_user.get("_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    user_id = str(user_id)
     existing_test = await db.tests.find_one({"_id": ObjectId(test_id)})
     if not existing_test:
         raise HTTPException(status_code=404, detail="Test not found")
+    
+    # Verify ownership - normalize both sides for comparison
+    existing_created_by = existing_test.get("created_by")
+    if not existing_created_by:
+        logger.error(f"[update_test] SECURITY: Test {test_id} has no created_by field")
+        raise HTTPException(status_code=403, detail="You don't have permission to update this test")
+    if str(existing_created_by).strip() != user_id.strip():
+        logger.error(f"[update_test] SECURITY ISSUE: User {user_id} attempted to update test {test_id} created by {existing_created_by}")
+        raise HTTPException(status_code=403, detail="You don't have permission to update this test")
+    
+    # Validate that all questions belong to the current user
+    if test.question_ids:
+        question_ids = [ObjectId(qid) if ObjectId.is_valid(qid) else None for qid in test.question_ids]
+        question_ids = [qid for qid in question_ids if qid is not None]
+        
+        if question_ids:
+            questions = await db.questions.find({"_id": {"$in": question_ids}}).to_list(length=len(question_ids))
+            # Check if all questions exist and belong to the user
+            found_question_ids = {str(q["_id"]) for q in questions}
+            requested_question_ids = {str(qid) for qid in question_ids}
+            
+            if found_question_ids != requested_question_ids:
+                raise HTTPException(status_code=400, detail="Some questions not found")
+            
+            # Verify ownership - normalize both sides for comparison
+            for question in questions:
+                q_created_by = question.get("created_by")
+                if not q_created_by or str(q_created_by).strip() != user_id.strip():
+                    raise HTTPException(status_code=403, detail=f"Question {question.get('title', 'Unknown')} does not belong to you")
     
     # Prepare update data
     test_dict = test.model_dump()
@@ -813,13 +1122,35 @@ async def bulk_add_candidates(
 
 
 @router.get("/{test_id}/candidates")
-async def get_test_candidates(test_id: str):
+async def get_test_candidates(
+    test_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """
-    Get all candidates for a test
+    Get all candidates for a test (requires authentication and ownership)
+    Only test creators can view candidates
     """
     db = get_database()
+    # Get current user ID
+    user_id = current_user.get("id") or current_user.get("_id")
+    if not user_id:
+        logger.error(f"[get_test_candidates] Invalid user ID in current_user: {list(current_user.keys())}")
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    user_id = str(user_id).strip()
+    
+    # Verify test exists and belongs to current user
     if not ObjectId.is_valid(test_id):
         raise HTTPException(status_code=400, detail="Invalid test ID")
+    
+    test = await db.tests.find_one({"_id": ObjectId(test_id)})
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+    
+    # CRITICAL SECURITY CHECK: Verify ownership
+    test_created_by = test.get("created_by")
+    if not test_created_by or str(test_created_by).strip() != user_id:
+        logger.error(f"[get_test_candidates] SECURITY ISSUE: User {user_id} attempted to access candidates for test {test_id} created by {test_created_by}")
+        raise HTTPException(status_code=403, detail="You don't have permission to view candidates for this test")
     
     candidates = await db.test_candidates.find({"test_id": test_id}).sort("created_at", -1).to_list(length=1000)
     
@@ -846,11 +1177,36 @@ async def get_test_candidates(test_id: str):
 
 
 @router.get("/{test_id}/candidates/{user_id}/analytics")
-async def get_candidate_analytics(test_id: str, user_id: str):
+async def get_candidate_analytics(
+    test_id: str,
+    user_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """
-    Get detailed analytics for a candidate including AI feedback
+    Get detailed analytics for a candidate including AI feedback (requires authentication and ownership)
+    Only test creators can view candidate analytics
     """
     db = get_database()
+    # Get current user ID
+    current_user_id = current_user.get("id") or current_user.get("_id")
+    if not current_user_id:
+        logger.error(f"[get_candidate_analytics] Invalid user ID in current_user: {list(current_user.keys())}")
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    current_user_id = str(current_user_id).strip()
+    
+    # Verify test exists and belongs to current user
+    if not ObjectId.is_valid(test_id):
+        raise HTTPException(status_code=400, detail="Invalid test ID")
+    
+    test = await db.tests.find_one({"_id": ObjectId(test_id)})
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+    
+    # CRITICAL SECURITY CHECK: Verify ownership
+    test_created_by = test.get("created_by")
+    if not test_created_by or str(test_created_by).strip() != current_user_id:
+        logger.error(f"[get_candidate_analytics] SECURITY ISSUE: User {current_user_id} attempted to access analytics for test {test_id} created by {test_created_by}")
+        raise HTTPException(status_code=403, detail="You don't have permission to view analytics for this test")
     if not ObjectId.is_valid(test_id) or not ObjectId.is_valid(user_id):
         raise HTTPException(status_code=400, detail="Invalid test ID or user ID")
     
@@ -1066,13 +1422,35 @@ async def bulk_add_candidates(
 
 
 @router.get("/{test_id}/candidates")
-async def get_test_candidates(test_id: str):
+async def get_test_candidates(
+    test_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """
-    Get all candidates for a test
+    Get all candidates for a test (requires authentication and ownership)
+    Only test creators can view candidates
     """
     db = get_database()
+    # Get current user ID
+    user_id = current_user.get("id") or current_user.get("_id")
+    if not user_id:
+        logger.error(f"[get_test_candidates] Invalid user ID in current_user: {list(current_user.keys())}")
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    user_id = str(user_id).strip()
+    
+    # Verify test exists and belongs to current user
     if not ObjectId.is_valid(test_id):
         raise HTTPException(status_code=400, detail="Invalid test ID")
+    
+    test = await db.tests.find_one({"_id": ObjectId(test_id)})
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+    
+    # CRITICAL SECURITY CHECK: Verify ownership
+    test_created_by = test.get("created_by")
+    if not test_created_by or str(test_created_by).strip() != user_id:
+        logger.error(f"[get_test_candidates] SECURITY ISSUE: User {user_id} attempted to access candidates for test {test_id} created by {test_created_by}")
+        raise HTTPException(status_code=403, detail="You don't have permission to view candidates for this test")
     
     candidates = await db.test_candidates.find({"test_id": test_id}).sort("created_at", -1).to_list(length=1000)
     
@@ -1099,11 +1477,36 @@ async def get_test_candidates(test_id: str):
 
 
 @router.get("/{test_id}/candidates/{user_id}/analytics")
-async def get_candidate_analytics(test_id: str, user_id: str):
+async def get_candidate_analytics(
+    test_id: str,
+    user_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     """
-    Get detailed analytics for a candidate including AI feedback
+    Get detailed analytics for a candidate including AI feedback (requires authentication and ownership)
+    Only test creators can view candidate analytics
     """
     db = get_database()
+    # Get current user ID
+    current_user_id = current_user.get("id") or current_user.get("_id")
+    if not current_user_id:
+        logger.error(f"[get_candidate_analytics] Invalid user ID in current_user: {list(current_user.keys())}")
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    current_user_id = str(current_user_id).strip()
+    
+    # Verify test exists and belongs to current user
+    if not ObjectId.is_valid(test_id):
+        raise HTTPException(status_code=400, detail="Invalid test ID")
+    
+    test = await db.tests.find_one({"_id": ObjectId(test_id)})
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+    
+    # CRITICAL SECURITY CHECK: Verify ownership
+    test_created_by = test.get("created_by")
+    if not test_created_by or str(test_created_by).strip() != current_user_id:
+        logger.error(f"[get_candidate_analytics] SECURITY ISSUE: User {current_user_id} attempted to access analytics for test {test_id} created by {test_created_by}")
+        raise HTTPException(status_code=403, detail="You don't have permission to view analytics for this test")
     if not ObjectId.is_valid(test_id) or not ObjectId.is_valid(user_id):
         raise HTTPException(status_code=400, detail="Invalid test ID or user ID")
     
@@ -1253,15 +1656,31 @@ class PublishTestRequest(BaseModel):
 @router.patch("/{test_id}/publish")
 async def publish_test(
     test_id: str,
-    request: PublishTestRequest = Body(...)
+    request: PublishTestRequest = Body(...),
+    current_user: Dict[str, Any] = Depends(require_editor)
 ):
     """
-    Publish or unpublish a test (no auth required)
+    Publish or unpublish a test (requires authentication and ownership)
     When publishing, generates a single shared test token if not already exists
     """
     db = get_database()
     if not ObjectId.is_valid(test_id):
         raise HTTPException(status_code=400, detail="Invalid test ID")
+    
+    # Check if test exists and belongs to the current user
+    user_id = current_user.get("id") or current_user.get("_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    user_id = str(user_id)
+    test = await db.tests.find_one({"_id": ObjectId(test_id)})
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+    
+    # Verify ownership
+    test_created_by = test.get("created_by")
+    if not test_created_by or str(test_created_by).strip() != user_id.strip():
+        logger.error(f"[publish_test] SECURITY ISSUE: User {user_id} attempted to publish/unpublish test {test_id} created by {test_created_by}")
+        raise HTTPException(status_code=403, detail="You don't have permission to publish/unpublish this test")
     
     # Use boolean directly from request body
     is_published_bool = request.is_published
@@ -1270,8 +1689,7 @@ async def publish_test(
     
     # If publishing and no token exists, generate a shared test token
     if is_published_bool:
-        test = await db.tests.find_one({"_id": ObjectId(test_id)})
-        if test and not test.get("test_token"):
+        if not test.get("test_token"):
             update_data["test_token"] = secrets.token_urlsafe(32)
     
     result = await db.tests.update_one(
@@ -1304,15 +1722,33 @@ async def publish_test(
     return test_dict
 
 @router.delete("/{test_id}")
-async def delete_test(test_id: str):
+async def delete_test(
+    test_id: str,
+    current_user: Dict[str, Any] = Depends(require_editor)
+):
     """
-    Delete a test (no auth required)
+    Delete a test (requires authentication and ownership)
     Note: This will delete the test but not associated submissions or candidate records.
     Consider adding cascade delete if needed.
     """
     db = get_database()
     if not ObjectId.is_valid(test_id):
         raise HTTPException(status_code=400, detail="Invalid test ID")
+    
+    # Check if test exists and belongs to the current user
+    user_id = current_user.get("id") or current_user.get("_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    user_id = str(user_id)
+    existing_test = await db.tests.find_one({"_id": ObjectId(test_id)})
+    if not existing_test:
+        raise HTTPException(status_code=404, detail="Test not found")
+    
+    # Verify ownership
+    existing_created_by = existing_test.get("created_by")
+    if not existing_created_by or str(existing_created_by).strip() != user_id.strip():
+        logger.error(f"[delete_test] SECURITY ISSUE: User {user_id} attempted to delete test {test_id} created by {existing_created_by}")
+        raise HTTPException(status_code=403, detail="You don't have permission to delete this test")
     
     result = await db.tests.delete_one({"_id": ObjectId(test_id)})
     if result.deleted_count == 0:

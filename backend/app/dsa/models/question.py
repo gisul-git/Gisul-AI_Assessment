@@ -130,3 +130,4 @@ class QuestionUpdate(BaseModel):
     wrapper_template: Optional[str] = None
     is_published: Optional[bool] = None
 
+

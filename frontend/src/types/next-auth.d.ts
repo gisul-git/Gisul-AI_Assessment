@@ -10,6 +10,8 @@ declare module "next-auth" {
       email?: string | null;
       role?: string;
       organization?: string | null;
+      phone?: string | null;
+      country?: string | null;
     };
   }
 
@@ -26,6 +28,8 @@ declare module "next-auth/jwt" {
     backendToken?: string;
     role?: string;
     organization?: string | null;
+    phone?: string | null;
+    country?: string | null;
     provider?: string;
   }
 }

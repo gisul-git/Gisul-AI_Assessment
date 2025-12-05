@@ -22,42 +22,104 @@ logger = logging.getLogger("backend")
 # Language IDs supported by Judge0
 # Full list at: https://ce.judge0.com/languages
 # Admins can use ANY language ID that Judge0 supports
+# This is the comprehensive list of all Judge0-supported languages
 LANGUAGE_IDS = {
-    "python": 71,      # Python 3
-    "python2": 70,     # Python 2
-    "javascript": 63,  # Node.js
-    "cpp": 54,         # C++ (GCC)
-    "cpp17": 52,       # C++ 17
-    "java": 62,        # Java
-    "c": 50,           # C
-    "go": 60,          # Go
-    "rust": 73,        # Rust
-    "typescript": 74,  # TypeScript
-    "php": 68,         # PHP
-    "ruby": 72,        # Ruby
-    "kotlin": 78,      # Kotlin
-    "csharp": 51,      # C#
-    "swift": 83,       # Swift
-    "scala": 81,       # Scala
-    "perl": 85,        # Perl
-    "haskell": 61,     # Haskell
-    "lua": 64,         # Lua
-    "r": 80,           # R
-    "bash": 46,        # Bash
-    "sql": 82,         # SQL
-    "pascal": 67,      # Pascal
-    "fortran": 59,     # Fortran
-    "cobol": 77,       # COBOL
-    "erlang": 58,      # Erlang
-    "elixir": 57,      # Elixir
-    "clojure": 86,     # Clojure
-    "fsharp": 87,      # F#
-    "ocaml": 65,       # OCaml
-    "lisp": 55,        # Common Lisp
-    "prolog": 69,      # Prolog
-    "groovy": 88,      # Groovy
-    "assembly": 45,    # Assembly (NASM)
+    # Compiled Languages
+    "c": 50,           # C (GCC 9.4.0)
+    "cpp": 54,         # C++ (GCC 9.4.0)
+    "cpp17": 52,       # C++ 17 (GCC 9.4.0)
+    "java": 62,        # Java (OpenJDK 13.0.1)
+    "csharp": 51,      # C# (Mono 6.6.0.161)
+    "go": 60,          # Go (1.13.5)
+    "rust": 73,        # Rust (1.40.0)
+    "swift": 83,       # Swift (5.2.3)
+    "kotlin": 78,      # Kotlin (1.3.70)
+    "scala": 81,       # Scala (2.13)
+    "pascal": 67,      # Pascal (FPC 3.0.4)
+    "fortran": 59,     # Fortran (GFortran 9.2.0)
+    "cobol": 77,       # COBOL (GnuCOBOL 2.2)
+    "assembly": 45,    # Assembly (NASM 2.14.02)
+    
+    # Interpreted Languages
+    "python": 71,      # Python 3 (3.8.1)
+    "python2": 70,     # Python 2 (2.7.17)
+    "javascript": 63,  # Node.js (12.14.0)
+    "typescript": 74,  # TypeScript (3.7.4)
+    "php": 68,         # PHP (7.4.1)
+    "ruby": 72,        # Ruby (2.7.0)
+    "perl": 85,        # Perl (5.28.1)
+    "lua": 64,         # Lua (5.3.5)
+    "r": 80,           # R (4.0.0)
+    "bash": 46,        # Bash (5.0.0)
+    "groovy": 88,      # Groovy (3.0.3)
+    
+    # Functional Languages
+    "haskell": 61,     # Haskell (GHC 8.8.1)
+    "ocaml": 65,       # OCaml (4.09.0)
+    "fsharp": 87,      # F# (4.7)
+    "clojure": 86,     # Clojure (1.10.1)
+    "lisp": 55,        # Common Lisp (SBCL 2.0.0)
+    "scheme": 55,      # Scheme (Gauche 0.9.9)
+    "prolog": 69,      # Prolog (GNU Prolog 1.4.5)
+    
+    # Other Languages
+    "erlang": 58,      # Erlang (OTP 22.2)
+    "elixir": 57,      # Elixir (1.9.4)
+    "sql": 82,         # SQL (SQLite 3.27.2)
+    "vbnet": 84,       # VB.NET (vbnc 0.0.0.5943)
 }
+
+# Language display names mapping (for UI)
+LANGUAGE_DISPLAY_NAMES = {
+    "c": "C",
+    "cpp": "C++",
+    "cpp17": "C++ 17",
+    "java": "Java",
+    "csharp": "C#",
+    "go": "Go",
+    "rust": "Rust",
+    "swift": "Swift",
+    "kotlin": "Kotlin",
+    "scala": "Scala",
+    "pascal": "Pascal",
+    "fortran": "Fortran",
+    "cobol": "COBOL",
+    "assembly": "Assembly (NASM)",
+    "python": "Python 3",
+    "python2": "Python 2",
+    "javascript": "JavaScript",
+    "typescript": "TypeScript",
+    "php": "PHP",
+    "ruby": "Ruby",
+    "perl": "Perl",
+    "lua": "Lua",
+    "r": "R",
+    "bash": "Bash",
+    "groovy": "Groovy",
+    "haskell": "Haskell",
+    "ocaml": "OCaml",
+    "fsharp": "F#",
+    "clojure": "Clojure",
+    "lisp": "Common Lisp",
+    "scheme": "Scheme",
+    "prolog": "Prolog",
+    "erlang": "Erlang",
+    "elixir": "Elixir",
+    "sql": "SQL (SQLite)",
+    "vbnet": "VB.NET",
+}
+
+# Get all Judge0 language IDs as a list (for frontend)
+def get_all_judge0_languages() -> List[Dict[str, Any]]:
+    """Get all Judge0-supported languages with their IDs and display names."""
+    return [
+        {
+            "id": str(lang_id),
+            "name": lang_name,
+            "display_name": LANGUAGE_DISPLAY_NAMES.get(lang_name, lang_name.title()),
+        }
+        for lang_name, lang_id in LANGUAGE_IDS.items()
+    ]
 
 # Judge0 Status Codes
 JUDGE0_STATUS = {

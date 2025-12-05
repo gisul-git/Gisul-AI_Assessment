@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import { GetServerSideProps } from "next";
 import { requireAuth } from "../../lib/auth";
 import axios from "axios";
+import dsaApi from "../../lib/dsa/api";
 
 interface Question {
   id: string;
@@ -28,11 +29,32 @@ export default function CreateDSACompetencyPage() {
 
   useEffect(() => {
     fetchQuestions();
+    
+    // Refresh questions when page becomes visible (e.g., returning from question creation)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchQuestions();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Also refresh on focus (when user switches back to the tab)
+    const handleFocus = () => {
+      fetchQuestions();
+    };
+    
+    window.addEventListener('focus', handleFocus);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, []);
 
   const fetchQuestions = async () => {
     try {
-      const response = await axios.get(`${apiUrl}/api/dsa/questions/`);
+      const response = await dsaApi.get("/questions/");
       setQuestions(response.data);
     } catch (error) {
       console.error("Error fetching questions:", error);
@@ -44,7 +66,7 @@ export default function CreateDSACompetencyPage() {
     setLoading(true);
 
     try {
-      const response = await axios.post(`${apiUrl}/api/dsa/tests/`, {
+      const response = await dsaApi.post("/tests/", {
         ...formData,
         start_time: new Date(formData.start_time).toISOString(),
         end_time: new Date(formData.end_time).toISOString(),
@@ -79,7 +101,7 @@ export default function CreateDSACompetencyPage() {
     }
 
     try {
-      await axios.delete(`${apiUrl}/api/dsa/questions/${questionId}`);
+      await dsaApi.delete(`/questions/${questionId}`);
       
       // Remove from selected questions if it was selected
       if (formData.question_ids.includes(questionId)) {

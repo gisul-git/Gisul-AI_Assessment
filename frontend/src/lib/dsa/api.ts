@@ -9,28 +9,36 @@ export const dsaApi = axios.create({
   },
 })
 
-// Add token to requests if available
-dsaApi.interceptors.request.use((config) => {
+// Add token to requests - CRITICAL: All DSA API calls require authentication
+dsaApi.interceptors.request.use(async (config) => {
   if (typeof window !== 'undefined') {
     // Try to get token from NextAuth session first, fallback to localStorage
-    const getToken = async () => {
-      try {
-        // Check if NextAuth is available
-        const { getSession } = await import('next-auth/react')
-        const session = await getSession()
-        if (session?.backendToken) {
-          return session.backendToken
-        }
-      } catch (e) {
-        // NextAuth not available, use localStorage
+    let token: string | null = null
+    try {
+      // Check if NextAuth is available
+      const { getSession } = await import('next-auth/react')
+      const session = await getSession()
+      if (session?.backendToken) {
+        token = session.backendToken
       }
-      return localStorage.getItem('token')
+    } catch (e) {
+      // NextAuth not available, use localStorage
+      console.warn('[dsaApi] NextAuth not available, using localStorage fallback')
     }
     
-    // For now, use localStorage token (will be updated when session is available)
-    const token = localStorage.getItem('token')
-    if (token) {
+    // Fallback to localStorage if session token not available
+    if (!token) {
+      token = localStorage.getItem('token')
+    }
+    
+    // CRITICAL: Log warning if no token found (but don't block - let backend handle 401)
+    if (!token) {
+      console.error('[dsaApi] SECURITY WARNING: No authentication token found for DSA API request:', config.url)
+      console.error('[dsaApi] This request will likely fail with 401 Unauthorized')
+    } else {
       config.headers.Authorization = `Bearer ${token}`
+      // Log token presence (but not the token itself) for debugging
+      console.debug('[dsaApi] Authorization token added to request:', config.url)
     }
   }
   return config

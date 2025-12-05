@@ -163,8 +163,15 @@ async def startup() -> None:
     db = get_database()
     
     # Initialize DSA MongoDB connection (uses .env for MONGO_URI and MONGO_DB)
-    from app.dsa.database import connect_to_dsa_mongo
+    from app.dsa.database import connect_to_dsa_mongo, get_dsa_database
     await connect_to_dsa_mongo()
+    dsa_db = get_dsa_database()
+    
+    # CRITICAL: Create indexes on created_by for DSA collections to ensure fast, secure queries
+    # This index is essential for user isolation security
+    await dsa_db.tests.create_index("created_by", name="created_by_index")
+    await dsa_db.questions.create_index("created_by", name="created_by_index")
+    logger.info("DSA MongoDB indexes created for security (created_by)")
     
     # Ensure indexes for optimal query performance (supports 100k+ requests)
     

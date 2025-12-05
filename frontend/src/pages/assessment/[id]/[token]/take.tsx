@@ -8,11 +8,70 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useRouter } from "next/router";
+import dynamic from "next/dynamic";
 import axios from "axios";
 import { useProctor, type ProctorViolation } from "@/hooks/useProctor";
 import { useCameraProctor, type CameraProctorViolation } from "@/hooks/useCameraProctor";
 import { useLiveProctor } from "@/hooks/useLiveProctor";
 import { ProctorToast, FullscreenWarningBanner, ProctorDebugPanel } from "@/components/proctor";
+import { EditorContainer, type SubmissionTestcaseResult } from "@/components/dsa/test/EditorContainer";
+import type { SubmissionHistoryEntry } from "@/components/dsa/test/EditorContainer";
+import { QuestionTabs } from "@/components/dsa/test/QuestionTabs";
+import { getLanguageId, JUDGE0_ID_TO_LANG_NAME } from "@/lib/dsa/judge0";
+import Split from 'react-split';
+
+// Lazy load Monaco Editor
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
+  ssr: false,
+  loading: () => (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "400px", backgroundColor: "#1e1e1e", color: "#fff" }}>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ width: "40px", height: "40px", border: "4px solid #3b82f6", borderTop: "4px solid transparent", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 1rem" }} />
+        <p>Loading code editor...</p>
+      </div>
+    </div>
+  ),
+});
+
+// Judge0 Language ID to Monaco language mapping
+const JUDGE0_TO_MONACO: { [key: string]: string } = {
+  "50": "c",
+  "54": "cpp",
+  "62": "java",
+  "71": "python",
+  "70": "python",
+  "63": "javascript",
+  "74": "typescript",
+  "68": "php",
+  "72": "ruby",
+  "83": "swift",
+  "60": "go",
+  "78": "kotlin",
+  "73": "rust",
+  "82": "sql",
+  "51": "csharp",
+  "84": "vb",
+};
+
+// Judge0 Language ID to display name
+const JUDGE0_LANGUAGE_NAMES: { [key: string]: string } = {
+  "50": "C",
+  "54": "C++",
+  "62": "Java",
+  "71": "Python 3",
+  "70": "Python 2",
+  "63": "JavaScript",
+  "74": "TypeScript",
+  "68": "PHP",
+  "72": "Ruby",
+  "83": "Swift",
+  "60": "Go",
+  "78": "Kotlin",
+  "73": "Rust",
+  "82": "SQL",
+  "51": "C#",
+  "84": "VB.NET",
+};
 
 interface Question {
   questionText: string;
@@ -25,6 +84,22 @@ interface Question {
   time?: number;
   score?: number;
   topic?: string;
+  // Coding question fields
+  language?: string; // Judge0 language ID (e.g., "71" for Python)
+  judge0_enabled?: boolean;
+  coding_data?: {
+    title?: string;
+    description?: string;
+    examples?: Array<{ input: string; output: string; explanation?: string | null }>;
+    constraints?: string[];
+    public_testcases?: Array<{ input: string; expected_output: string }>;
+    hidden_testcases?: Array<{ input: string; expected_output: string }>;
+    starter_code?: string | Record<string, string>;
+    function_signature?: string;
+  };
+  starter_code?: string;
+  public_testcases?: Array<{ input: string; expected_output: string }>;
+  hidden_testcases?: Array<{ input: string; expected_output: string }>;
 }
 
 export default function CandidateAssessmentPage() {
@@ -66,6 +141,16 @@ export default function CandidateAssessmentPage() {
   const [showFullscreenWarning, setShowFullscreenWarning] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [cameraProctorEnabled, setCameraProctorEnabled] = useState(false);
+  
+  // Coding question state (using DSA EditorContainer format)
+  const [code, setCode] = useState<{ [questionIndex: number]: string }>({});
+  const [language, setLanguage] = useState<{ [questionIndex: number]: string }>({});
+  const [runningCode, setRunningCode] = useState<{ [questionIndex: number]: boolean }>({});
+  const [submittingCode, setSubmittingCode] = useState<{ [questionIndex: number]: boolean }>({});
+  const [codeOutput, setCodeOutput] = useState<{ [questionIndex: number]: { stdout?: string; stderr?: string; compileOutput?: string; status?: string; time?: number; memory?: number } }>({});
+  const [publicResults, setPublicResults] = useState<{ [questionIndex: number]: SubmissionTestcaseResult[] }>({});
+  const [hiddenSummary, setHiddenSummary] = useState<{ [questionIndex: number]: { total: number; passed: number } | null }>({});
+  const [submissionHistory, setSubmissionHistory] = useState<{ [questionIndex: number]: SubmissionHistoryEntry[] }>({});
   
   // Pre-captured streams from instructions page for live proctoring
   const [preCapturedWebcamStream, setPreCapturedWebcamStream] = useState<MediaStream | null>(null);
@@ -237,6 +322,32 @@ export default function CandidateAssessmentPage() {
           setQuestions(fetchedQuestions);
           setQuestionTypeTimes(fetchedQuestionTypeTimes);
           setEnablePerSectionTimers(fetchedEnablePerSectionTimers);
+          
+          // Initialize coding question code and language with starter code
+          const initialCode: { [questionIndex: number]: string } = {};
+          const initialLanguage: { [questionIndex: number]: string } = {};
+          fetchedQuestions.forEach((q: Question, index: number) => {
+            if (q.type === "coding" && q.judge0_enabled) {
+              // Get starter code from coding_data or starter_code field
+              const starterCode = q.coding_data?.starter_code || q.starter_code || "";
+              // Get language name from language ID
+              const langId = q.language || "71";
+              const langName = JUDGE0_ID_TO_LANG_NAME[langId] || "python";
+              
+              // Handle both string and Record<string, string> formats
+              if (typeof starterCode === "string") {
+                initialCode[index] = starterCode || "";
+              } else if (starterCode && typeof starterCode === "object") {
+                initialCode[index] = starterCode[langName] || Object.values(starterCode)[0] || "";
+              } else {
+                initialCode[index] = "";
+              }
+              
+              initialLanguage[index] = langName;
+            }
+          });
+          setCode(initialCode);
+          setLanguage(initialLanguage);
           
           // Group questions by type and set current type
           const questionsByType: { [key: string]: Question[] } = {};
@@ -711,21 +822,41 @@ export default function CandidateAssessmentPage() {
     const currentQuestion = questions[currentQuestionIndex];
     const questionType = currentQuestion?.type || "";
     
-    // Save the answer locally (already done in handleAnswerChange, but ensure it's saved)
-    if (currentAnswer.trim()) {
+    // For coding questions, ensure code is saved in answers
+    if (currentQuestion && currentQuestion.type === "coding" && currentQuestion.judge0_enabled) {
+      const currentCode = code[currentQuestionIndex] || "";
       const timeSpent = Math.floor((Date.now() - typeStartTime) / 1000);
       const existingAnswerIndex = answers.findIndex((a) => a.questionIndex === currentQuestionIndex);
       
       if (existingAnswerIndex >= 0) {
         const updated = [...answers];
-        updated[existingAnswerIndex] = { questionIndex: currentQuestionIndex, answer: currentAnswer, timeSpent };
+        updated[existingAnswerIndex] = { questionIndex: currentQuestionIndex, answer: currentCode, timeSpent };
         setAnswers(updated);
       } else {
-        setAnswers([...answers, { questionIndex: currentQuestionIndex, answer: currentAnswer, timeSpent }]);
+        setAnswers([...answers, { questionIndex: currentQuestionIndex, answer: currentCode, timeSpent }]);
       }
       
       // Log answer only if it has changed from last saved version
-      await saveAnswerLogIfChanged(currentQuestionIndex, currentAnswer, questionType);
+      if (currentCode.trim()) {
+        await saveAnswerLogIfChanged(currentQuestionIndex, currentCode, questionType);
+      }
+    } else {
+      // Save the answer locally (already done in handleAnswerChange, but ensure it's saved)
+      if (currentAnswer.trim()) {
+        const timeSpent = Math.floor((Date.now() - typeStartTime) / 1000);
+        const existingAnswerIndex = answers.findIndex((a) => a.questionIndex === currentQuestionIndex);
+        
+        if (existingAnswerIndex >= 0) {
+          const updated = [...answers];
+          updated[existingAnswerIndex] = { questionIndex: currentQuestionIndex, answer: currentAnswer, timeSpent };
+          setAnswers(updated);
+        } else {
+          setAnswers([...answers, { questionIndex: currentQuestionIndex, answer: currentAnswer, timeSpent }]);
+        }
+        
+        // Log answer only if it has changed from last saved version
+        await saveAnswerLogIfChanged(currentQuestionIndex, currentAnswer, questionType);
+      }
     }
     
     // Move to next question within current type
@@ -882,8 +1013,305 @@ export default function CandidateAssessmentPage() {
   };
 
   const getCurrentAnswer = () => {
+    const currentQuestion = questions[currentQuestionIndex];
+    // For coding questions, get code from code state
+    if (currentQuestion && currentQuestion.type === "coding" && currentQuestion.judge0_enabled) {
+      return code[currentQuestionIndex] || "";
+    }
+    // For other questions, get from answers
     const answer = answers.find((a) => a.questionIndex === currentQuestionIndex);
     return answer?.answer || "";
+  };
+
+  // Initialize code and language for coding questions when question changes
+  useEffect(() => {
+    const currentQuestion = questions[currentQuestionIndex];
+    if (currentQuestion && currentQuestion.type === "coding" && currentQuestion.judge0_enabled) {
+      // Get language name from language ID
+      const langId = currentQuestion.language || "71";
+      const langName = JUDGE0_ID_TO_LANG_NAME[langId] || "python";
+      
+      // Initialize language if not already set
+      if (!language[currentQuestionIndex]) {
+        setLanguage(prev => ({ ...prev, [currentQuestionIndex]: langName }));
+      }
+      
+      // Initialize code if not already set
+      if (!code[currentQuestionIndex]) {
+        const starterCode = currentQuestion.coding_data?.starter_code || currentQuestion.starter_code || "";
+        setCode(prev => ({ ...prev, [currentQuestionIndex]: starterCode || "" }));
+      }
+    }
+  }, [currentQuestionIndex, questions]);
+
+  // Handle code change for coding questions
+  const handleCodeChange = (value: string | undefined) => {
+    // Prevent code changes if section time has expired
+    if (enablePerSectionTimers && completedTypes.has(currentQuestionType)) {
+      return;
+    }
+    
+    if (value !== undefined) {
+      setCode(prev => ({ ...prev, [currentQuestionIndex]: value }));
+      // Also update answer for submission
+      const currentAnswer = answers.find((a) => a.questionIndex === currentQuestionIndex);
+      if (currentAnswer) {
+        setAnswers(prev => prev.map(a => 
+          a.questionIndex === currentQuestionIndex 
+            ? { ...a, answer: value }
+            : a
+        ));
+      } else {
+        setAnswers(prev => [...prev, {
+          questionIndex: currentQuestionIndex,
+          answer: value,
+          timeSpent: Math.floor((Date.now() - questionStartTime) / 1000),
+        }]);
+      }
+    }
+  };
+
+  // Handle run code for coding questions (using DSA EditorContainer format)
+  const handleRunCode = async () => {
+    // Prevent running if section time has expired
+    if (enablePerSectionTimers && completedTypes.has(currentQuestionType)) {
+      return;
+    }
+    
+    const currentQuestion = questions[currentQuestionIndex];
+    if (!currentQuestion || currentQuestion.type !== "coding" || !currentQuestion.judge0_enabled) {
+      return;
+    }
+
+    const currentCode = code[currentQuestionIndex] || "";
+    if (!currentCode.trim()) {
+      setErrorMessage("Please write some code before running.");
+      return;
+    }
+
+    setRunningCode(prev => ({ ...prev, [currentQuestionIndex]: true }));
+    setCodeOutput(prev => ({ ...prev, [currentQuestionIndex]: {} }));
+    setPublicResults(prev => ({ ...prev, [currentQuestionIndex]: [] }));
+
+    try {
+      const languageId = parseInt(currentQuestion.language || "71");
+      const testcases = currentQuestion.coding_data?.public_testcases || currentQuestion.public_testcases || [];
+
+      const response = await axios.post("/api/assessment/run-code", {
+        assessmentId: id,
+        token,
+        questionIndex: currentQuestionIndex,
+        sourceCode: currentCode,
+        languageId: languageId,
+        testcases: testcases,
+      });
+
+      if (response.data?.success) {
+        const results = response.data.data.results || [];
+        
+        // Map results to EditorContainer format
+        const mappedResults: SubmissionTestcaseResult[] = results.map((r: any) => ({
+          visible: true,
+          input: r.input || "",
+          expected: r.expected || "",
+          output: r.output || "",
+          stdout: r.output || "",
+          stderr: r.stderr || "",
+          compile_output: r.compile_output || "",
+          time: r.time || null,
+          memory: r.memory || null,
+          status: r.status || "",
+          passed: r.passed || false,
+        }));
+        
+        setPublicResults(prev => ({ ...prev, [currentQuestionIndex]: mappedResults }));
+        
+        const passedCount = results.filter((r: any) => r.passed).length;
+        const totalCount = results.length;
+        
+        setCodeOutput(prev => ({
+          ...prev,
+          [currentQuestionIndex]: {
+            stdout: passedCount === totalCount 
+              ? `✅ All ${totalCount} public test cases passed!`
+              : `❌ ${passedCount}/${totalCount} public test cases passed`,
+            status: passedCount === totalCount ? "success" : "partial",
+          },
+        }));
+
+        // Update answer with code
+        handleCodeChange(currentCode);
+      } else {
+        setCodeOutput(prev => ({
+          ...prev,
+          [currentQuestionIndex]: {
+            stderr: response.data?.message || "Failed to run code",
+            status: "error",
+          },
+        }));
+      }
+    } catch (err: any) {
+      console.error("Error running code:", err);
+      setCodeOutput(prev => ({
+        ...prev,
+        [currentQuestionIndex]: {
+          stderr: err.response?.data?.message || err.message || "Failed to run code",
+          status: "error",
+        },
+      }));
+    } finally {
+      setRunningCode(prev => ({ ...prev, [currentQuestionIndex]: false }));
+    }
+  };
+
+  // Handle submit code for coding questions (final submission) - using DSA EditorContainer format
+  const handleSubmitCode = async () => {
+    // Prevent submitting if section time has expired
+    if (enablePerSectionTimers && completedTypes.has(currentQuestionType)) {
+      return;
+    }
+    
+    const currentQuestion = questions[currentQuestionIndex];
+    if (!currentQuestion || currentQuestion.type !== "coding" || !currentQuestion.judge0_enabled) {
+      return;
+    }
+
+    const currentCode = code[currentQuestionIndex] || "";
+    if (!currentCode.trim()) {
+      setErrorMessage("Please write some code before submitting.");
+      return;
+    }
+
+    setSubmittingCode(prev => ({ ...prev, [currentQuestionIndex]: true }));
+
+    try {
+      const languageId = parseInt(currentQuestion.language || "71");
+      const publicTestcases = currentQuestion.coding_data?.public_testcases || currentQuestion.public_testcases || [];
+      const hiddenTestcases = currentQuestion.coding_data?.hidden_testcases || currentQuestion.hidden_testcases || [];
+
+      const response = await axios.post("/api/assessment/submit-code", {
+        assessmentId: id,
+        token,
+        questionIndex: currentQuestionIndex,
+        sourceCode: currentCode,
+        languageId: languageId,
+        publicTestcases: publicTestcases,
+        hiddenTestcases: hiddenTestcases,
+      });
+
+      if (response.data?.success) {
+        const data = response.data.data;
+        const publicResultsData = data.publicResults || [];
+        
+        // Map results to EditorContainer format
+        const mappedResults: SubmissionTestcaseResult[] = publicResultsData.map((r: any) => ({
+          visible: true,
+          input: r.input || "",
+          expected: r.expected || "",
+          output: r.output || "",
+          stdout: r.output || "",
+          stderr: r.stderr || "",
+          compile_output: r.compile_output || "",
+          time: r.time || null,
+          memory: r.memory || null,
+          status: r.status || "",
+          passed: r.passed || false,
+        }));
+        
+        setPublicResults(prev => ({ ...prev, [currentQuestionIndex]: mappedResults }));
+        setHiddenSummary(prev => ({ 
+          ...prev, 
+          [currentQuestionIndex]: data.hiddenTotal > 0 
+            ? { total: data.hiddenTotal, passed: data.hiddenPassed || 0 }
+            : null 
+        }));
+        
+        const passedCount = data.publicPassed || 0;
+        const totalCount = data.publicTotal || 0;
+        const hiddenPassed = data.hiddenPassed || 0;
+        const hiddenTotal = data.hiddenTotal || 0;
+        
+        setCodeOutput(prev => ({
+          ...prev,
+          [currentQuestionIndex]: {
+            stdout: `Public: ${passedCount}/${totalCount} passed${hiddenTotal > 0 ? ` | Hidden: ${hiddenPassed}/${hiddenTotal} passed` : ""}`,
+            status: "submitted",
+          },
+        }));
+
+        // Create submission history entry
+        const historyEntry: SubmissionHistoryEntry = {
+          id: `${currentQuestionIndex}-${Date.now()}`,
+          status: passedCount === totalCount && (hiddenTotal === 0 || hiddenPassed === hiddenTotal) ? "accepted" : "partial",
+          passed: passedCount,
+          total: totalCount,
+          score: passedCount,
+          max_score: totalCount,
+          created_at: new Date().toISOString(),
+          results: mappedResults,
+          public_results: mappedResults,
+          hidden_results: [],
+          hidden_summary: hiddenTotal > 0 ? { total: hiddenTotal, passed: hiddenPassed } : undefined,
+        };
+        
+        setSubmissionHistory(prev => ({
+          ...prev,
+          [currentQuestionIndex]: [historyEntry, ...(prev[currentQuestionIndex] || [])].slice(0, 5),
+        }));
+
+        // Update answer with code and mark as submitted
+        handleCodeChange(currentCode);
+        setSubmittedQuestions(prev => {
+          const newSet = new Set(prev);
+          newSet.add(currentQuestionIndex);
+          return newSet;
+        });
+
+        setSuccessMessage("Code submitted successfully!");
+        setTimeout(() => setSuccessMessage(null), 3000);
+      } else {
+        setCodeOutput(prev => ({
+          ...prev,
+          [currentQuestionIndex]: {
+            stderr: response.data?.message || "Failed to submit code",
+            status: "error",
+          },
+        }));
+      }
+    } catch (err: any) {
+      console.error("Error submitting code:", err);
+      setCodeOutput(prev => ({
+        ...prev,
+        [currentQuestionIndex]: {
+          stderr: err.response?.data?.message || err.message || "Failed to submit code",
+          status: "error",
+        },
+      }));
+    } finally {
+      setSubmittingCode(prev => ({ ...prev, [currentQuestionIndex]: false }));
+    }
+  };
+
+  // Handle reset code for coding questions
+  const handleResetCode = () => {
+    const currentQuestion = questions[currentQuestionIndex];
+    if (!currentQuestion || currentQuestion.type !== "coding" || !currentQuestion.judge0_enabled) {
+      return;
+    }
+    
+    const starterCode = currentQuestion.coding_data?.starter_code || currentQuestion.starter_code || "";
+    const langId = currentQuestion.language || "71";
+    const langName = JUDGE0_ID_TO_LANG_NAME[langId] || "python";
+    
+    // Handle both string and Record<string, string> formats
+    let resetCode = "";
+    if (typeof starterCode === "string") {
+      resetCode = starterCode || "";
+    } else if (starterCode && typeof starterCode === "object") {
+      resetCode = starterCode[langName] || Object.values(starterCode)[0] || "";
+    }
+    
+    setCode(prev => ({ ...prev, [currentQuestionIndex]: resetCode }));
   };
 
   if (loading) {
@@ -1222,52 +1650,190 @@ export default function CandidateAssessmentPage() {
             </div>
           )}
 
-          {/* Question */}
-          <div style={{ marginBottom: "1.5rem" }}>
-            <div style={{ marginBottom: "0.75rem", display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
-              <span
-                style={{
-                  backgroundColor: "#eff6ff",
-                  color: "#1e40af",
-                  padding: "0.2rem 0.6rem",
-                  borderRadius: "9999px",
-                  fontSize: "0.7rem",
-                  fontWeight: 600,
-                }}
-              >
-                {currentQuestion.type}
-              </span>
-              <span
-                style={{
-                  backgroundColor: "#fef3c7",
-                  color: "#92400e",
-                  padding: "0.2rem 0.6rem",
-                  borderRadius: "9999px",
-                  fontSize: "0.7rem",
-                  fontWeight: 500,
-                }}
-              >
-                {currentQuestion.difficulty}
-              </span>
-              <span
-                style={{
-                  backgroundColor: "#f0fdf4",
-                  color: "#166534",
-                  padding: "0.2rem 0.6rem",
-                  borderRadius: "9999px",
-                  fontSize: "0.7rem",
-                  fontWeight: 500,
-                }}
-              >
-                {currentQuestion.score || 5} pts
-              </span>
+          {/* Question and Answer Area */}
+          {currentQuestion.type === "coding" && currentQuestion.judge0_enabled ? (
+            /* Side-by-side layout for coding questions (like DSA) */
+            <div style={{ marginBottom: "1.5rem", height: "calc(100vh - 350px)", minHeight: "650px" }}>
+              {/* Warning if section time expired */}
+              {enablePerSectionTimers && completedTypes.has(currentQuestionType) && (
+                <div style={{ 
+                  marginBottom: "1rem", 
+                  padding: "1rem", 
+                  backgroundColor: "#fef2f2", 
+                  border: "2px solid #ef4444", 
+                  borderRadius: "0.5rem",
+                  color: "#dc2626"
+                }}>
+                  <strong>⚠️ This section's time has expired. You can no longer edit or run code.</strong>
+                </div>
+              )}
+              
+              <div style={{ 
+                opacity: (enablePerSectionTimers && completedTypes.has(currentQuestionType)) ? 0.6 : 1,
+                pointerEvents: (enablePerSectionTimers && completedTypes.has(currentQuestionType)) ? "none" : "auto",
+                height: "100%",
+                border: "1px solid #e2e8f0",
+                borderRadius: "0.5rem",
+                overflow: "hidden",
+                backgroundColor: "#ffffff"
+              }}>
+                <Split
+                  className="flex h-full"
+                  direction="horizontal"
+                  minSize={[300, 400]}
+                  sizes={[40, 60]}
+                  gutterSize={4}
+                  gutterStyle={() => ({
+                    backgroundColor: '#e2e8f0',
+                    cursor: 'col-resize',
+                  })}
+                >
+                  {/* Left side - Question tabs */}
+                  <div className="h-full overflow-hidden bg-white border-r border-slate-200">
+                    {currentQuestion.coding_data?.title ? (
+                      <QuestionTabs
+                        question={{
+                          id: `q_${currentQuestionIndex}`,
+                          title: currentQuestion.coding_data.title || "Coding Question",
+                          description: currentQuestion.coding_data.description || currentQuestion.questionText || "",
+                          examples: currentQuestion.coding_data.examples || [],
+                          constraints: currentQuestion.coding_data.constraints || [],
+                          difficulty: currentQuestion.difficulty,
+                          public_testcases: currentQuestion.coding_data.public_testcases || currentQuestion.public_testcases || [],
+                          hidden_testcases: currentQuestion.coding_data.hidden_testcases || currentQuestion.hidden_testcases || [],
+                        }}
+                      />
+                    ) : (
+                      <div style={{ padding: "1.5rem", height: "100%", overflowY: "auto" }}>
+                        <div style={{ marginBottom: "0.75rem", display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                          <span
+                            style={{
+                              backgroundColor: "#eff6ff",
+                              color: "#1e40af",
+                              padding: "0.2rem 0.6rem",
+                              borderRadius: "9999px",
+                              fontSize: "0.7rem",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {currentQuestion.type}
+                          </span>
+                          <span
+                            style={{
+                              backgroundColor: "#fef3c7",
+                              color: "#92400e",
+                              padding: "0.2rem 0.6rem",
+                              borderRadius: "9999px",
+                              fontSize: "0.7rem",
+                              fontWeight: 500,
+                            }}
+                          >
+                            {currentQuestion.difficulty}
+                          </span>
+                          <span
+                            style={{
+                              backgroundColor: "#f0fdf4",
+                              color: "#166534",
+                              padding: "0.2rem 0.6rem",
+                              borderRadius: "9999px",
+                              fontSize: "0.7rem",
+                              fontWeight: 500,
+                            }}
+                          >
+                            {currentQuestion.score || 5} pts
+                          </span>
+                        </div>
+                        <p style={{ color: "#1e293b", lineHeight: 1.6, whiteSpace: "pre-wrap", fontSize: "0.9375rem" }}>
+                          {currentQuestion.questionText}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right side - Code editor */}
+                  <div className="h-full overflow-hidden bg-slate-950">
+                    <EditorContainer
+                      code={code[currentQuestionIndex] || ""}
+                      language={language[currentQuestionIndex] || JUDGE0_ID_TO_LANG_NAME[currentQuestion.language || "71"] || "python"}
+                      languages={[JUDGE0_ID_TO_LANG_NAME[currentQuestion.language || "71"] || "python"]}
+                      starterCode={(() => {
+                        const langName = JUDGE0_ID_TO_LANG_NAME[currentQuestion.language || "71"] || "python";
+                        const starterCode = currentQuestion.coding_data?.starter_code || currentQuestion.starter_code || "";
+                        if (typeof starterCode === "string") {
+                          return { [langName]: starterCode };
+                        } else if (starterCode && typeof starterCode === "object") {
+                          return starterCode;
+                        }
+                        return { [langName]: "" };
+                      })()}
+                      onCodeChange={(value) => handleCodeChange(value)}
+                      onLanguageChange={() => {}}
+                      onRun={handleRunCode}
+                      onSubmit={handleSubmitCode}
+                      onReset={handleResetCode}
+                      running={runningCode[currentQuestionIndex] || false}
+                      submitting={submittingCode[currentQuestionIndex] || false}
+                      output={codeOutput[currentQuestionIndex]}
+                      submissions={submissionHistory[currentQuestionIndex] || []}
+                      visibleTestcases={(currentQuestion.coding_data?.public_testcases || currentQuestion.public_testcases || []).map((tc: any, idx: number) => ({
+                        id: `tc_${idx}`,
+                        input: tc.input || "",
+                        expected: tc.expected_output || "",
+                      }))}
+                      publicResults={publicResults[currentQuestionIndex] || []}
+                      hiddenSummary={hiddenSummary[currentQuestionIndex] || null}
+                    />
+                  </div>
+                </Split>
+              </div>
             </div>
+          ) : (
+            /* Regular layout for non-coding questions */
+            <div style={{ marginBottom: "1.5rem" }}>
+              <div style={{ marginBottom: "0.75rem", display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                <span
+                  style={{
+                    backgroundColor: "#eff6ff",
+                    color: "#1e40af",
+                    padding: "0.2rem 0.6rem",
+                    borderRadius: "9999px",
+                    fontSize: "0.7rem",
+                    fontWeight: 600,
+                  }}
+                >
+                  {currentQuestion.type}
+                </span>
+                <span
+                  style={{
+                    backgroundColor: "#fef3c7",
+                    color: "#92400e",
+                    padding: "0.2rem 0.6rem",
+                    borderRadius: "9999px",
+                    fontSize: "0.7rem",
+                    fontWeight: 500,
+                  }}
+                >
+                  {currentQuestion.difficulty}
+                </span>
+                <span
+                  style={{
+                    backgroundColor: "#f0fdf4",
+                    color: "#166534",
+                    padding: "0.2rem 0.6rem",
+                    borderRadius: "9999px",
+                    fontSize: "0.7rem",
+                    fontWeight: 500,
+                  }}
+                >
+                  {currentQuestion.score || 5} pts
+                </span>
+              </div>
 
-            <p style={{ color: "#1e293b", lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: "1rem", fontSize: "0.9375rem" }}>
-              {currentQuestion.questionText}
-            </p>
+              <p style={{ color: "#1e293b", lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: "1rem", fontSize: "0.9375rem" }}>
+                {currentQuestion.questionText}
+              </p>
 
-              {/* Answer Input - Disabled if section is completed (only if per-section timers are enabled) */}
+              {/* Answer Input - Disabled if section is completed */}
               {enablePerSectionTimers && completedTypes.has(currentQuestionType) && (
                 <div style={{ 
                   marginBottom: "1rem", 
@@ -1280,6 +1846,7 @@ export default function CandidateAssessmentPage() {
                   <strong>⚠️ This section's time has expired. You can no longer answer questions in this section.</strong>
                 </div>
               )}
+
               {currentQuestion.type === "MCQ" && currentQuestion.options ? (
                 <div style={{ marginTop: "1rem" }}>
                   {currentQuestion.options.map((option, optIndex) => (
@@ -1340,7 +1907,8 @@ export default function CandidateAssessmentPage() {
                   }}
                 />
               )}
-          </div>
+            </div>
+          )}
 
               {/* Navigation - Within Current Type */}
               <div style={{ display: "flex", gap: "0.75rem", marginTop: "1.5rem", paddingTop: "1.5rem", borderTop: "1px solid #e2e8f0" }}>

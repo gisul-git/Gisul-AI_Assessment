@@ -4,6 +4,8 @@ export interface BackendUser {
   email: string;
   role: string;
   organization?: string | null;
+  phone?: string | null;
+  country?: string | null;
   token: string;
   refreshToken?: string;
 }

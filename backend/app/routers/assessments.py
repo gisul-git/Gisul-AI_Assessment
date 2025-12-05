@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -16,25 +17,31 @@ from ..schemas.assessment import (
     AddNewQuestionRequest,
     CreateAssessmentFromJobDesignationRequest,
     DeleteQuestionRequest,
+    DeleteTopicQuestionsRequest,
     FinalizeAssessmentRequest,
     GenerateQuestionsFromConfigRequest,
     GenerateQuestionsRequest,
     GenerateTopicCardsRequest,
     GenerateTopicsFromSkillRequest,
     GenerateTopicsRequest,
+    RegenerateSingleTopicRequest,
     RemoveCustomTopicsRequest,
     ScheduleUpdateRequest,
     TopicConfigRow,
+    UpdateAssessmentDraftRequest,
     UpdateQuestionsRequest,
     UpdateSingleQuestionRequest,
     UpdateTopicSettingsRequest,
+    ValidateQuestionTypeRequest,
 )
 from ..services.ai import (
+    determine_topic_coding_support,
     generate_questions_for_topic_safe,
     generate_topics_from_input,
     generate_topics_from_skill,
     generate_topics_from_selected_skills,
     generate_topic_cards_from_job_designation,
+    get_question_type_for_topic,
     get_relevant_question_types,
     get_relevant_question_types_from_domain,
     suggest_time_and_score,
@@ -242,6 +249,8 @@ async def generate_topics(
         for key, category_name in aptitude_category_map.items():
             category_config = getattr(apt_config, key, None)
             if category_config and category_config.enabled:
+                # Aptitude topics don't support coding
+                coding_supported = await determine_topic_coding_support(category_name)
                 topic_docs.append(
                     {
                         "topic": category_name,
@@ -252,6 +261,7 @@ async def generate_topics(
                         "category": "aptitude",
                         "questions": [],
                         "questionConfigs": [],
+                        "coding_supported": coding_supported,
                     }
                 )
                 custom_topics.append(category_name)
@@ -267,8 +277,11 @@ async def generate_topics(
         topics = await generate_topics_from_input(sanitized_job_role, payload.experience, sanitized_skills, payload.numTopics)
         # Sanitize generated topics
         sanitized_topics = [sanitize_text_field(topic) for topic in topics]
-        technical_topic_docs = [
-            {
+        # Determine coding support for each topic
+        technical_topic_docs = []
+        for t in sanitized_topics:
+            coding_supported = await determine_topic_coding_support(t)
+            technical_topic_docs.append({
                 "topic": t,
                 "numQuestions": 0,
                 "questionTypes": [],
@@ -277,9 +290,8 @@ async def generate_topics(
                 "category": "technical",
                 "questions": [],
                 "questionConfigs": [],
-            }
-            for t in sanitized_topics
-        ]
+                "coding_supported": coding_supported,
+            })
         topic_docs.extend(technical_topic_docs)
         custom_topics.extend(sanitized_topics)
         title_parts.append(sanitized_job_role)
@@ -407,6 +419,8 @@ async def add_custom_topics(
             topic_name = sanitize_text_field(topic_data)
             exists = any(t.get("topic") == topic_name for t in topics)
             if not exists:
+                # Automatically determine if topic supports coding
+                coding_supported = await determine_topic_coding_support(topic_name)
                 topics.append(
                     {
                         "topic": topic_name,
@@ -416,6 +430,7 @@ async def add_custom_topics(
                         "source": "User",
                         "questions": [],
                         "questionConfigs": [],
+                        "coding_supported": coding_supported,
                     }
                 )
             custom_topics.add(topic_name)
@@ -460,8 +475,31 @@ async def remove_custom_topics(
     _check_assessment_access(assessment, current_user)
 
     topics_to_remove = set(payload.topicsToRemove)
+    
+    # Remove topics from topics array
     assessment["topics"] = [t for t in assessment.get("topics", []) if t.get("topic") not in topics_to_remove]
+    
+    # Remove topics from customTopics array
     assessment["customTopics"] = [t for t in assessment.get("customTopics", []) if t not in topics_to_remove]
+    
+    # Remove questions that belong to removed topics
+    # Questions are stored in assessment["questions"] array, and each question has a "topic" field
+    if "questions" in assessment and isinstance(assessment["questions"], list):
+        assessment["questions"] = [
+            q for q in assessment["questions"] 
+            if q.get("topic") not in topics_to_remove
+        ]
+    
+    # Also remove questions from topic objects themselves
+    for topic in assessment.get("topics", []):
+        if isinstance(topic, dict) and "questions" in topic:
+            if isinstance(topic["questions"], list):
+                # Keep only questions that don't belong to removed topics
+                # (though this shouldn't be necessary if questions are properly structured)
+                topic["questions"] = [
+                    q for q in topic["questions"]
+                    if q.get("topic") not in topics_to_remove
+                ]
 
     await _save_assessment(db, assessment)
     # Serialize topics to convert ObjectIds and datetimes to JSON-serializable formats
@@ -477,7 +515,15 @@ async def generate_topic_cards_endpoint(
 ):
     """Generate topic cards (technologies/skills) from job designation."""
     try:
-        cards = await generate_topic_cards_from_job_designation(payload.jobDesignation)
+        # Sanitize input to prevent XSS
+        sanitized_job_designation = sanitize_text_field(payload.jobDesignation)
+        experience_min = payload.experienceMin if payload.experienceMin is not None else 0
+        experience_max = payload.experienceMax if payload.experienceMax is not None else 10
+        cards = await generate_topic_cards_from_job_designation(
+            sanitized_job_designation, 
+            experience_min, 
+            experience_max
+        )
         
         return success_response(
             "Topic cards generated successfully",
@@ -485,9 +531,12 @@ async def generate_topic_cards_endpoint(
                 "cards": cards,
             }
         )
+    except HTTPException:
+        # Re-raise HTTPExceptions as-is (they already have proper status codes and messages)
+        raise
     except Exception as exc:
-        logger.error(f"Error generating topic cards: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to generate topic cards") from exc
+        logger.error(f"Error generating topic cards: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate topic cards: {str(exc)}") from exc
 
 
 @router.post("/generate-topics-from-skill")
@@ -511,6 +560,245 @@ async def generate_topics_from_skill_endpoint(
     except Exception as exc:
         logger.error(f"Error generating topics from skill: {exc}")
         raise HTTPException(status_code=500, detail="Failed to generate topics") from exc
+
+
+@router.post("/validate-question-type")
+async def validate_question_type_endpoint(
+    payload: ValidateQuestionTypeRequest,
+    current_user: Dict[str, Any] = Depends(require_editor),
+):
+    """
+    Validate if a question type is appropriate for a given topic.
+    Specifically validates that 'coding' type is only used for topics that support Judge0 execution.
+    """
+    try:
+        # Sanitize input to prevent XSS
+        sanitized_topic = sanitize_text_field(payload.topic)
+        question_type = payload.questionType.strip()
+        
+        if not sanitized_topic or not sanitized_topic.strip():
+            raise HTTPException(status_code=400, detail="Topic name is required")
+        
+        if question_type not in ["MCQ", "Subjective", "Pseudo Code", "Descriptive", "coding"]:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid question type: {question_type}. Must be one of: MCQ, Subjective, Pseudo Code, Descriptive, coding"
+            )
+        
+        # Special validation for coding type
+        if question_type == "coding":
+            coding_supported = await determine_topic_coding_support(sanitized_topic)
+            if not coding_supported:
+                # Also determine the appropriate question type for this topic
+                suggested_type = await get_question_type_for_topic(sanitized_topic)
+                return success_response(
+                    "Question type validation failed",
+                    {
+                        "valid": False,
+                        "reason": f"Topic '{sanitized_topic}' does not support coding questions that can be executed by Judge0. Topics related to frameworks, UI/UX, theory, or non-executable concepts do not support coding type.",
+                        "suggestedType": suggested_type,
+                        "codingSupported": False,
+                    }
+                )
+            return success_response(
+                "Question type is valid",
+                {
+                    "valid": True,
+                    "codingSupported": True,
+                }
+            )
+        
+        # For non-coding types, they're generally valid for any topic
+        # But we can still check if the topic would be better suited for coding
+        coding_supported = await determine_topic_coding_support(sanitized_topic)
+        suggested_type = await get_question_type_for_topic(sanitized_topic)
+        
+        return success_response(
+            "Question type is valid",
+            {
+                "valid": True,
+                "codingSupported": coding_supported,
+                "suggestedType": suggested_type,
+                "note": f"Topic supports coding: {coding_supported}. Suggested type: {suggested_type}" if coding_supported and question_type != "coding" else None,
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error validating question type: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to validate question type: {str(exc)}") from exc
+
+
+@router.post("/regenerate-single-topic")
+async def regenerate_single_topic_endpoint(
+    payload: RegenerateSingleTopicRequest,
+    current_user: Dict[str, Any] = Depends(require_editor),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Regenerate a new topic name based on skills, update question type and coding support, delete its questions."""
+    try:
+        # Sanitize input to prevent XSS
+        old_topic_name = sanitize_text_field(payload.topic)
+        
+        if not old_topic_name or not old_topic_name.strip():
+            raise HTTPException(status_code=400, detail="Topic name is required")
+        
+        new_topic_name = old_topic_name
+        question_type = "MCQ"
+        coding_supported = False
+        
+        # If assessmentId is provided, regenerate topic based on skills and update the assessment
+        if payload.assessmentId:
+            assessment = await _get_assessment(db, payload.assessmentId)
+            _check_assessment_access(assessment, current_user)
+            
+            # Get skills and experience from assessment
+            selected_skills = assessment.get("selectedSkills", [])
+            experience_min = assessment.get("experienceMin", 0)
+            experience_max = assessment.get("experienceMax", 10)
+            
+            # Find the topic to regenerate
+            topics = assessment.get("topics", [])
+            topic_obj = next((t for t in topics if t.get("topic") == old_topic_name), None)
+            
+            if topic_obj:
+                # Only regenerate technical topics (not aptitude)
+                if not topic_obj.get("isAptitude", False) and selected_skills:
+                    # Generate a new topic based on skills
+                    try:
+                        # Filter out aptitude skills
+                        _, technical_skills = _separate_skills(selected_skills)
+                        if technical_skills:
+                            # Generate new topics from skills
+                            new_topics = await generate_topics_from_selected_skills(
+                                technical_skills,
+                                str(experience_min),
+                                str(experience_max)
+                            )
+                            # Use the first generated topic as the new topic name
+                            if new_topics and len(new_topics) > 0:
+                                new_topic_name = sanitize_text_field(new_topics[0])
+                                # Update the topic name in the assessment
+                                topic_obj["topic"] = new_topic_name
+                    except Exception as e:
+                        logger.warning(f"Failed to generate new topic name: {e}. Keeping original topic name.")
+                        # If generation fails, keep the old topic name
+                        new_topic_name = old_topic_name
+                
+                # Clear questions for this topic
+                topic_obj["questions"] = []
+                topic_obj["numQuestions"] = 0
+                
+                # Get question type and coding support for the new topic
+                # Uses get_question_type_for_topic which now properly returns MCQ/Subjective for appropriate topics
+                question_type, coding_supported = await asyncio.gather(
+                    get_question_type_for_topic(new_topic_name),
+                    determine_topic_coding_support(new_topic_name),
+                    return_exceptions=True
+                )
+                
+                # Handle exceptions gracefully
+                if isinstance(question_type, Exception):
+                    logger.warning(f"Failed to determine question type for topic '{new_topic_name}': {question_type}")
+                    question_type = "MCQ"  # Safe fallback
+                if isinstance(coding_supported, Exception):
+                    logger.warning(f"Failed to determine coding support for topic '{new_topic_name}': {coding_supported}")
+                    coding_supported = False  # Safe fallback
+                
+                # Update topic with new question type and coding support
+                topic_obj["questionTypes"] = [question_type]
+                topic_obj["coding_supported"] = coding_supported
+                
+                # Save the assessment
+                await _save_assessment(db, assessment)
+        else:
+            # If no assessmentId, just get question type and coding support for the topic
+            # Uses get_question_type_for_topic which now properly returns MCQ/Subjective for appropriate topics
+            question_type, coding_supported = await asyncio.gather(
+                get_question_type_for_topic(new_topic_name),
+                determine_topic_coding_support(new_topic_name),
+                return_exceptions=True
+            )
+            
+            # Handle exceptions gracefully
+            if isinstance(question_type, Exception):
+                logger.warning(f"Failed to determine question type for topic '{new_topic_name}': {question_type}")
+                question_type = "MCQ"  # Safe fallback
+            if isinstance(coding_supported, Exception):
+                logger.warning(f"Failed to determine coding support for topic '{new_topic_name}': {coding_supported}")
+                coding_supported = False  # Safe fallback
+        
+        # If question type is "coding" but topic doesn't support coding, change to a safe default
+        # The improved get_question_type_for_topic should rarely return "coding" for non-coding topics,
+        # but this is a safety check
+        if question_type == "coding" and not coding_supported:
+            logger.warning(f"Topic '{new_topic_name}' was assigned 'coding' but doesn't support coding. Changing to 'Subjective'.")
+            question_type = "Subjective"  # Safe fallback for non-coding topics
+        
+        return success_response(
+            "Topic regenerated successfully",
+            {
+                "topic": new_topic_name,
+                "questionType": question_type,
+                "coding_supported": coding_supported,
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error regenerating single topic: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to regenerate topic: {str(exc)}") from exc
+
+
+@router.post("/delete-topic-questions")
+async def delete_topic_questions(
+    payload: DeleteTopicQuestionsRequest,
+    current_user: Dict[str, Any] = Depends(require_editor),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Delete questions for a specific topic or all topics."""
+    try:
+        assessment = await _get_assessment(db, payload.assessmentId)
+        _check_assessment_access(assessment, current_user)
+        
+        topics = assessment.get("topics", [])
+        
+        if payload.topic:
+            # Delete questions for a specific topic only
+            topic_obj = next((t for t in topics if t.get("topic") == payload.topic), None)
+            if topic_obj:
+                topic_obj["questions"] = []
+                topic_obj["numQuestions"] = 0
+            
+            # Clear preview questions for this specific topic only (not all preview questions)
+            preview_questions = assessment.get("previewQuestions", [])
+            if preview_questions and isinstance(preview_questions, list):
+                filtered_preview_questions = [
+                    q for q in preview_questions 
+                    if q.get("topic") != payload.topic
+                ]
+                assessment["previewQuestions"] = filtered_preview_questions
+                logger.info(f"Deleted preview questions for topic '{payload.topic}'. Remaining preview questions: {len(filtered_preview_questions)}")
+        else:
+            # Delete questions for all topics
+            for topic_obj in topics:
+                topic_obj["questions"] = []
+                topic_obj["numQuestions"] = 0
+            
+            # Clear all preview questions only when deleting all topics
+            assessment["previewQuestions"] = []
+        
+        await _save_assessment(db, assessment)
+        
+        return success_response(
+            "Questions deleted successfully",
+            {"deleted": True}
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error deleting topic questions: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete questions: {str(exc)}") from exc
 
 
 @router.post("/create-assessment-from-job-designation")
@@ -574,30 +862,58 @@ async def create_assessment_from_job_designation(
                 payload.experienceMax
             )
             
-            # Get question types based on the job designation/domain (AI-powered detection)
-            question_types = await get_relevant_question_types_from_domain(payload.jobDesignation)
-            
+            # Process topics in parallel to determine question types and coding support (optimized)
+            topic_processing_tasks = []
             for topic in technical_topics:
                 sanitized_topic = sanitize_text_field(topic)
-                topic_doc = {
+                # Create tasks for parallel processing
+                topic_processing_tasks.append({
                     "topic": sanitized_topic,
+                    "question_type_task": get_question_type_for_topic(sanitized_topic),
+                    "coding_support_task": determine_topic_coding_support(sanitized_topic),
+                })
+            
+            # Execute all tasks in parallel for better performance
+            for task_info in topic_processing_tasks:
+                question_type, coding_supported = await asyncio.gather(
+                    task_info["question_type_task"],
+                    task_info["coding_support_task"],
+                    return_exceptions=True
+                )
+                
+                # Handle exceptions gracefully
+                if isinstance(question_type, Exception):
+                    logger.warning(f"Failed to determine question type for topic '{task_info['topic']}': {question_type}")
+                    question_type = "MCQ"  # Safe fallback
+                if isinstance(coding_supported, Exception):
+                    logger.warning(f"Failed to determine coding support for topic '{task_info['topic']}': {coding_supported}")
+                    coding_supported = False  # Safe fallback
+                
+                # If question type is "coding" but topic doesn't support coding, change to a safe default
+                if question_type == "coding" and not coding_supported:
+                    logger.warning(f"Topic '{task_info['topic']}' was assigned 'coding' but doesn't support coding. Changing to 'Subjective'.")
+                    question_type = "Subjective"  # Safe fallback for non-coding topics
+                
+                topic_doc = {
+                    "topic": task_info["topic"],
                     "numQuestions": 0,
-                    "questionTypes": [question_types[0] if question_types else "Subjective"],  # Default question type
+                    "questionTypes": [question_type],  # Topic-specific question type
                     "difficulty": "Medium",  # Default difficulty
                     "source": "AI",
                     "category": "technical",
                     "questions": [],
                     "questionConfigs": [],
                     "isAptitude": False,  # Flag to identify technical topics
+                    "coding_supported": coding_supported,
                 }
                 topic_docs.append(topic_doc)
-                custom_topics.append(sanitized_topic)
+                custom_topics.append(task_info["topic"])
+                
+                # Add question type to all_question_types (avoid duplicates)
+                if question_type not in all_question_types:
+                    all_question_types.append(question_type)
             
             assessment_types.append("technical")
-            # Add technical question types (avoid duplicates)
-            for qtype in question_types:
-                if qtype not in all_question_types:
-                    all_question_types.append(qtype)
             has_technical_topics = True
         
         # If no topics were generated, raise an error
@@ -621,9 +937,16 @@ async def create_assessment_from_job_designation(
         if not all_question_types:
             all_question_types = ["Subjective"]  # Fallback
         
+        # Generate a default title if not provided
+        default_title = f"Assessment for {sanitized_job_designation}"
+        if is_aptitude and has_technical_topics:
+            default_title = f"Mixed Assessment: {sanitized_job_designation}"
+        elif is_aptitude:
+            default_title = f"Aptitude Assessment: {sanitized_job_designation}"
+        
         assessment_doc: Dict[str, Any] = {
-            "title": f"{sanitized_job_designation} Assessment",
-            "description": description,
+            "title": default_title,  # Set default title based on job designation
+            "description": description,  # Use generated description
             "topics": topic_docs,
             "customTopics": custom_topics,
             "assessmentType": assessment_types if assessment_types else ["technical"],
@@ -748,22 +1071,48 @@ async def generate_questions_from_config(
     # Update topics with configuration
     topics_dict = {t.get("topic"): t for t in assessment.get("topics", [])}
     
+    # Track question types and configs per topic (to handle multiple question types per topic)
+    topic_question_types: Dict[str, List[str]] = {}
+    topic_question_configs: Dict[str, List[Dict[str, Any]]] = {}
+    
     for topic_config in payload.topics:
         topic_obj = topics_dict.get(topic_config.topic)
         if topic_obj:
-            topic_obj["numQuestions"] = topic_config.numQuestions
-            topic_obj["difficulty"] = topic_config.difficulty
-            topic_obj["questionTypes"] = [topic_config.questionType]
+            # Initialize lists if not exists
+            if topic_config.topic not in topic_question_types:
+                topic_question_types[topic_config.topic] = []
+                topic_question_configs[topic_config.topic] = []
             
-            # Build question configs
-            question_configs = []
+            # Accumulate question types (avoid duplicates)
+            if topic_config.questionType not in topic_question_types[topic_config.topic]:
+                topic_question_types[topic_config.topic].append(topic_config.questionType)
+            
+            # Build question configs for this question type
             for i in range(topic_config.numQuestions):
-                question_configs.append({
-                    "questionNumber": i + 1,
+                q_config = {
+                    "questionNumber": len(topic_question_configs[topic_config.topic]) + 1,
                     "type": topic_config.questionType,
                     "difficulty": topic_config.difficulty,
-                })
-            topic_obj["questionConfigs"] = question_configs
+                }
+                # Add coding-specific fields if question type is coding
+                if topic_config.questionType == "coding":
+                    # Always enable Judge0 for coding questions
+                    q_config["judge0_enabled"] = True
+                    # Set language if specified
+                    if topic_config.language:
+                        q_config["language"] = topic_config.language
+                topic_question_configs[topic_config.topic].append(q_config)
+    
+    # Update topic objects with accumulated data
+    for topic_name, topic_obj in topics_dict.items():
+        if topic_name in topic_question_types:
+            topic_obj["questionTypes"] = topic_question_types[topic_name]
+            topic_obj["questionConfigs"] = topic_question_configs[topic_name]
+            # Set numQuestions to total across all question types
+            topic_obj["numQuestions"] = len(topic_question_configs[topic_name])
+            # Keep difficulty as the first one (or could be a list, but keeping simple for now)
+            if topic_question_configs[topic_name]:
+                topic_obj["difficulty"] = topic_question_configs[topic_name][0].get("difficulty", "Medium")
     
     # Generate questions for each topic
     all_questions = []
@@ -773,6 +1122,18 @@ async def generate_questions_from_config(
         topic_obj = topics_dict.get(topic_config.topic)
         if not topic_obj:
             continue
+        
+        # Validate: Reject coding questions for topics that don't support coding
+        if topic_config.questionType == "coding":
+            # Dynamically determine coding support (don't rely on stored value which might be outdated)
+            coding_supported = await determine_topic_coding_support(topic_config.topic)
+            if not coding_supported:
+                # Skip this question instead of failing the entire generation
+                logger.warning(f"Topic '{topic_config.topic}' does not support coding questions. Skipping this question.")
+                failed_topics.append(f"{topic_config.topic} (coding not supported)")
+                continue
+            # Update the topic object with the correct coding_supported value
+            topic_obj["coding_supported"] = coding_supported
             
         config = {
             "numQuestions": topic_config.numQuestions,
@@ -780,6 +1141,13 @@ async def generate_questions_from_config(
         for i in range(1, topic_config.numQuestions + 1):
             config[f"Q{i}type"] = topic_config.questionType
             config[f"Q{i}difficulty"] = topic_config.difficulty
+        # Add coding-specific fields if question type is coding
+        if topic_config.questionType == "coding":
+            # Always enable Judge0 for coding questions
+            config["judge0_enabled"] = True
+            # Set language if specified
+            if topic_config.language:
+                config["language"] = topic_config.language
         
         # For aptitude topics, build topic string with sub-topic and question type
         topic_for_generation = topic_config.topic
@@ -797,6 +1165,26 @@ async def generate_questions_from_config(
                 # Auto-generate time and score for each question
                 for q in questions:
                     q["topic"] = topic_config.topic
+                    # Ensure coding-specific fields are set for coding questions
+                    if topic_config.questionType == "coding":
+                        # Always enable Judge0 for coding questions
+                        q["judge0_enabled"] = True
+                        # Set language if specified
+                        if topic_config.language:
+                            q["language"] = topic_config.language
+                        # Preserve coding_data (testcases, starter_code, etc.) for Judge0 execution
+                        # This data is essential for Judge0 stdin/stdout test case execution
+                        if "coding_data" in q:
+                            # Ensure testcases are in Judge0 format (stdin/stdout)
+                            coding_data = q["coding_data"]
+                            if "public_testcases" in coding_data:
+                                q["public_testcases"] = coding_data["public_testcases"]
+                            if "hidden_testcases" in coding_data:
+                                q["hidden_testcases"] = coding_data["hidden_testcases"]
+                            if "starter_code" in coding_data:
+                                q["starter_code"] = coding_data["starter_code"]
+                            if "function_signature" in coding_data:
+                                q["function_signature"] = coding_data["function_signature"]
                     try:
                         time_score = await suggest_time_and_score(q)
                         q["time"] = time_score.get("time", 10)
@@ -1104,6 +1492,11 @@ async def finalize_assessment(
         if payload.passPercentage is not None:
             assessment["passPercentage"] = payload.passPercentage
         assessment["finalizedAt"] = _now_utc()
+        
+        # Generate assessment token if it doesn't exist
+        if not assessment.get("assessmentToken"):
+            assessment["assessmentToken"] = secrets.token_urlsafe(32)
+        
         await _save_assessment(db, assessment)
         
         # Serialize the assessment document before returning
@@ -1175,6 +1568,124 @@ async def get_assessment_schedule(
         "schedule": assessment.get("schedule"),
     }
     return success_response("Assessment schedule fetched successfully", data)
+
+
+@router.put("/update-draft")
+async def update_assessment_draft(
+    payload: UpdateAssessmentDraftRequest,
+    current_user: Dict[str, Any] = Depends(require_editor),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Update assessment draft data (preserves placeholder data)."""
+    assessment = await _get_assessment(db, payload.assessmentId)
+    _check_assessment_access(assessment, current_user)
+    
+    # Update title and description (even if empty/placeholder)
+    if payload.title is not None:
+        assessment["title"] = sanitize_text_field(payload.title) if payload.title else ""
+    if payload.description is not None:
+        assessment["description"] = sanitize_text_field(payload.description) if payload.description else ""
+    
+    # Update job designation and skills
+    if payload.jobDesignation is not None:
+        assessment["jobDesignation"] = sanitize_text_field(payload.jobDesignation) if payload.jobDesignation else ""
+    if payload.selectedSkills is not None:
+        assessment["selectedSkills"] = [sanitize_text_field(skill) for skill in payload.selectedSkills] if payload.selectedSkills else []
+    if payload.experienceMin is not None:
+        assessment["experienceMin"] = payload.experienceMin
+    if payload.experienceMax is not None:
+        assessment["experienceMax"] = payload.experienceMax
+    
+    # Update topics if provided
+    if payload.topics is not None:
+        # Convert topic configs to the format expected by the assessment
+        updated_topics = []
+        for topic_config in payload.topics:
+            topic_name = sanitize_text_field(topic_config.get("topic", ""))
+            if not topic_name:
+                continue
+                
+            # Check if topic already exists
+            existing_topic = next((t for t in assessment.get("topics", []) if t.get("topic") == topic_name), None)
+            
+            if existing_topic:
+                # Update existing topic
+                topic_obj = existing_topic
+            else:
+                # Create new topic
+                topic_obj = {
+                    "topic": topic_name,
+                    "numQuestions": 0,
+                    "questionTypes": [],
+                    "difficulty": "Medium",
+                    "source": "manual",
+                    "category": "technical",
+                    "questions": [],
+                    "questionConfigs": [],
+                }
+            
+            # Update topic with question type configs
+            question_type_configs = topic_config.get("questionTypeConfigs", [])
+            if question_type_configs:
+                topic_obj["questionTypes"] = [qtc.get("questionType") for qtc in question_type_configs if qtc.get("questionType")]
+                topic_obj["questionConfigs"] = []
+                total_questions = 0
+                
+                for qtc in question_type_configs:
+                    q_type = qtc.get("questionType", "MCQ")
+                    difficulty = qtc.get("difficulty", "Medium")
+                    num_questions = qtc.get("numQuestions", 1)
+                    
+                    for i in range(num_questions):
+                        q_config = {
+                            "questionNumber": total_questions + i + 1,
+                            "type": q_type,
+                            "difficulty": difficulty,
+                        }
+                        if q_type == "coding":
+                            q_config["judge0_enabled"] = qtc.get("judge0_enabled", True)
+                            if qtc.get("language"):
+                                q_config["language"] = qtc.get("language")
+                        topic_obj["questionConfigs"].append(q_config)
+                    
+                    total_questions += num_questions
+                
+                topic_obj["numQuestions"] = total_questions
+                topic_obj["difficulty"] = question_type_configs[0].get("difficulty", "Medium")
+            
+            # Handle aptitude topic fields
+            if topic_config.get("isAptitude"):
+                topic_obj["isAptitude"] = True
+                topic_obj["category"] = "aptitude"
+                if topic_config.get("subTopic"):
+                    topic_obj["subTopic"] = sanitize_text_field(topic_config.get("subTopic"))
+                if topic_config.get("aptitudeStructure"):
+                    topic_obj["aptitudeStructure"] = topic_config.get("aptitudeStructure")
+                if topic_config.get("availableSubTopics"):
+                    topic_obj["availableSubTopics"] = topic_config.get("availableSubTopics")
+            else:
+                # Handle technical topic fields
+                topic_obj["isAptitude"] = False
+                topic_obj["category"] = "technical"
+                # Preserve coding_supported if provided
+                if topic_config.get("coding_supported") is not None:
+                    topic_obj["coding_supported"] = topic_config.get("coding_supported")
+            
+            updated_topics.append(topic_obj)
+        
+        # Update assessment topics
+        assessment["topics"] = updated_topics
+    
+    # Update preview questions if provided
+    if payload.previewQuestions is not None:
+        assessment["previewQuestions"] = payload.previewQuestions
+    
+    # Ensure status remains draft
+    assessment["status"] = "draft"
+    assessment["updatedAt"] = _now_utc()
+    
+    await _save_assessment(db, assessment)
+    return success_response("Draft updated successfully", serialize_document(assessment))
 
 
 @router.post("/update-schedule-and-candidates")
@@ -1549,14 +2060,26 @@ async def get_candidate_results(
     return success_response("Candidate results fetched successfully", results)
 
 
-@router.get("/{assessment_id}/questions")
+@router.get("/{assessment_id}/questions", response_model=None)
 async def get_all_questions(
     assessment_id: str,
     current_user: Dict[str, Any] = Depends(require_editor),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    assessment = await _get_assessment(db, assessment_id)
+    logger.info(f"[get_all_questions] GET /api/assessments/{assessment_id}/questions - Request received")
+    print(f"[get_all_questions] GET /api/assessments/{assessment_id}/questions - Request received")
+    try:
+        assessment = await _get_assessment(db, assessment_id)
+    except HTTPException as e:
+        logger.error(f"[get_all_questions] Error getting assessment {assessment_id}: {e.detail}")
+        print(f"[get_all_questions] Error getting assessment {assessment_id}: {e.detail}")
+        raise
     _check_assessment_access(assessment, current_user)
+
+    # Generate assessment token if it doesn't exist and assessment is ready/active
+    if assessment.get("status") != "draft" and not assessment.get("assessmentToken"):
+        assessment["assessmentToken"] = secrets.token_urlsafe(32)
+        await _save_assessment(db, assessment)
 
     questions_with_topics: List[Dict[str, Any]] = []
     for topic in assessment.get("topics", []):
@@ -1573,6 +2096,10 @@ async def get_all_questions(
             )
             questions_with_topics.append(question_with_topic)
 
+    # Serialize full assessment with all fields for draft loading
+    # Convert topics to serializable format
+    serialized_topics = convert_object_ids(assessment.get("topics", []))
+    
     data = {
         "assessment": {
             "id": str(assessment.get("_id")),
@@ -1581,6 +2108,21 @@ async def get_all_questions(
             "status": assessment.get("status"),
             "totalQuestions": len(questions_with_topics),
             "schedule": assessment.get("schedule"),
+            "assessmentToken": assessment.get("assessmentToken"),
+            # Include all assessment fields needed for draft loading
+            "jobDesignation": assessment.get("jobDesignation"),
+            "selectedSkills": assessment.get("selectedSkills"),
+            "experienceMin": assessment.get("experienceMin"),
+            "experienceMax": assessment.get("experienceMax"),
+            "availableQuestionTypes": assessment.get("availableQuestionTypes"),
+            "isAptitudeAssessment": assessment.get("isAptitudeAssessment"),
+            "topics": serialized_topics,  # Include full topic objects with all fields (questionConfigs, isAptitude, coding_supported, etc.)
+            "previewQuestions": assessment.get("previewQuestions"),
+            "passPercentage": assessment.get("passPercentage"),
+            "questionTypeTimes": assessment.get("questionTypeTimes"),
+            "enablePerSectionTimers": assessment.get("enablePerSectionTimers"),
+            "candidates": assessment.get("candidates"),
+            "assessmentUrl": assessment.get("assessmentUrl"),
         },
         "topics": [
             {

@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-QUESTION_TYPES = {"MCQ", "Subjective", "Pseudo Code", "Descriptive", "Aptitude", "Reasoning"}
+QUESTION_TYPES = {"MCQ", "Subjective", "Pseudo Code", "Descriptive", "Aptitude", "Reasoning", "coding"}
 DIFFICULTY_LEVELS = {"Easy", "Medium", "Hard"}
 STATUS_VALUES = {"draft", "ready", "scheduled", "active", "completed"}
 
@@ -33,6 +33,8 @@ class Question(BaseModel):
     expectedLogic: Optional[str] = None
     time: Optional[int] = None  # Time in minutes
     score: Optional[int] = None  # Score in points
+    judge0_enabled: Optional[bool] = None  # For coding questions: whether Judge0 is enabled
+    language: Optional[str] = None  # For coding questions: selected language ID (e.g., "50" for C)
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None
 
@@ -118,6 +120,17 @@ class DeleteQuestionRequest(BaseModel):
     questionIndex: int = Field(..., ge=0)
 
 
+class DeleteTopicQuestionsRequest(BaseModel):
+    assessmentId: str
+    topic: Optional[str] = None  # If None, deletes questions for all topics
+
+
+class UpdateAssessmentDraftRequest(BaseModel):
+    assessmentId: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+
 class FinalizeAssessmentRequest(BaseModel):
     assessmentId: str
     title: Optional[str] = None
@@ -144,8 +157,15 @@ class GenerateTopicsFromSkillRequest(BaseModel):
     experienceMax: str = Field(default="10")
 
 
+class RegenerateSingleTopicRequest(BaseModel):
+    topic: str = Field(..., min_length=1)
+    assessmentId: Optional[str] = None  # If provided, regenerates topic based on assessment skills
+
+
 class GenerateTopicCardsRequest(BaseModel):
     jobDesignation: str = Field(..., min_length=1)
+    experienceMin: Optional[int] = Field(default=0, ge=0, le=20)
+    experienceMax: Optional[int] = Field(default=10, ge=0, le=20)
 
 
 class CreateAssessmentFromJobDesignationRequest(BaseModel):
@@ -163,6 +183,9 @@ class TopicConfigRow(BaseModel):
     # Aptitude topic fields
     isAptitude: Optional[bool] = False
     subTopic: Optional[str] = None
+    # Coding question fields
+    judge0_enabled: Optional[bool] = None  # For coding questions: whether Judge0 is enabled
+    language: Optional[str] = None  # For coding questions: selected language ID
 
 
 class GenerateQuestionsFromConfigRequest(BaseModel):
@@ -205,3 +228,8 @@ class ScheduleUpdateRequest(BaseModel):
 class AssessmentScheduleUpdateRequest(BaseModel):
     assessmentId: str
     schedule: ScheduleUpdateRequest
+
+
+class ValidateQuestionTypeRequest(BaseModel):
+    topic: str = Field(..., min_length=1)
+    questionType: str = Field(..., min_length=1)

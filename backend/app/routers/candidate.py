@@ -14,6 +14,7 @@ from ..schemas.assessment import LogAnswerRequest
 from ..services.ai import evaluate_answer_with_ai
 from ..utils.mongo import to_object_id
 from ..utils.responses import success_response
+from ..dsa.utils.judge0 import submit_to_judge0, run_all_test_cases
 
 logger = logging.getLogger(__name__)
 
@@ -1017,5 +1018,289 @@ async def submit_candidate_answers(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to submit answers: {str(exc)}"
+        ) from exc
+
+
+@router.post("/run-code")
+async def run_candidate_code(
+    payload: Dict[str, Any],
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Run code for a coding question (public test cases only)."""
+    assessment_id = payload.get("assessmentId")
+    token = payload.get("token")
+    question_index = payload.get("questionIndex")
+    source_code = payload.get("sourceCode")
+    language_id = payload.get("languageId")
+    testcases = payload.get("testcases", [])
+
+    if not assessment_id or not token or question_index is None or not source_code or not language_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing required fields")
+
+    try:
+        oid = to_object_id(assessment_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid assessment ID")
+
+    assessment = await db.assessments.find_one({"_id": oid})
+    if not assessment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found")
+
+    # Verify token
+    if assessment.get("assessmentToken") != token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid assessment token")
+
+    # Get the question
+    all_questions = []
+    for topic in assessment.get("topics", []):
+        topic_questions = topic.get("questions", [])
+        if topic_questions:
+            all_questions.extend(topic_questions)
+
+    if question_index >= len(all_questions):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid question index")
+
+    question = all_questions[question_index]
+    
+    # Verify it's a coding question
+    if question.get("type") != "coding" or not question.get("judge0_enabled"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question is not a coding question")
+
+    # Verify language matches question's language
+    question_language = question.get("language")
+    if question_language and str(question_language) != str(language_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Language mismatch. This question requires a specific language.")
+
+    # Build test cases from provided testcases or question's public testcases
+    test_cases = []
+    if testcases and len(testcases) > 0:
+        # Use provided testcases
+        for i, tc in enumerate(testcases):
+            test_cases.append({
+                "id": f"public_{i}",
+                "stdin": tc.get("input", ""),
+                "expected_output": tc.get("expected_output", ""),
+                "is_hidden": False,
+                "points": 1,
+            })
+    else:
+        # Use question's public testcases
+        public_testcases = question.get("coding_data", {}).get("public_testcases") or question.get("public_testcases", [])
+        for i, tc in enumerate(public_testcases):
+            test_cases.append({
+                "id": f"public_{i}",
+                "stdin": tc.get("input", ""),
+                "expected_output": tc.get("expected_output", ""),
+                "is_hidden": False,
+                "points": 1,
+            })
+
+    if not test_cases:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No test cases available")
+
+    try:
+        # Run test cases
+        results = await run_all_test_cases(
+            source_code=source_code,
+            language_id=int(language_id),
+            test_cases=test_cases,
+            cpu_time_limit=2.0,
+            memory_limit=128000,
+            stop_on_compilation_error=False,
+        )
+
+        # Format results for frontend
+        formatted_results = []
+        for i, result in enumerate(results.get("results", [])):
+            formatted_results.append({
+                "input": test_cases[i].get("stdin", ""),
+                "expected": test_cases[i].get("expected_output", ""),
+                "output": result.get("stdout", "").strip(),
+                "passed": result.get("passed", False),
+                "status": result.get("status", ""),
+                "time": result.get("time"),
+                "memory": result.get("memory"),
+            })
+
+        return success_response(
+            "Code executed successfully",
+            {
+                "results": formatted_results,
+                "total": len(formatted_results),
+                "passed": sum(1 for r in formatted_results if r.get("passed")),
+            }
+        )
+    except Exception as exc:
+        logger.exception(f"Error running code for assessment {assessment_id}, question {question_index}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to run code: {str(exc)}"
+        ) from exc
+
+
+@router.post("/submit-code")
+async def submit_candidate_code(
+    payload: Dict[str, Any],
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Submit code for a coding question (all test cases - public + hidden)."""
+    assessment_id = payload.get("assessmentId")
+    token = payload.get("token")
+    question_index = payload.get("questionIndex")
+    source_code = payload.get("sourceCode")
+    language_id = payload.get("languageId")
+    public_testcases = payload.get("publicTestcases", [])
+    hidden_testcases = payload.get("hiddenTestcases", [])
+
+    if not assessment_id or not token or question_index is None or not source_code or not language_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing required fields")
+
+    try:
+        oid = to_object_id(assessment_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid assessment ID")
+
+    assessment = await db.assessments.find_one({"_id": oid})
+    if not assessment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found")
+
+    # Verify token
+    if assessment.get("assessmentToken") != token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid assessment token")
+
+    # Get the question
+    all_questions = []
+    for topic in assessment.get("topics", []):
+        topic_questions = topic.get("questions", [])
+        if topic_questions:
+            all_questions.extend(topic_questions)
+
+    if question_index >= len(all_questions):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid question index")
+
+    question = all_questions[question_index]
+    
+    # Verify it's a coding question
+    if question.get("type") != "coding" or not question.get("judge0_enabled"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question is not a coding question")
+
+    # Verify language matches question's language
+    question_language = question.get("language")
+    if question_language and str(question_language) != str(language_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Language mismatch. This question requires a specific language.")
+
+    # Build test cases - public + hidden
+    test_cases = []
+    
+    # Add public test cases
+    if public_testcases and len(public_testcases) > 0:
+        for i, tc in enumerate(public_testcases):
+            test_cases.append({
+                "id": f"public_{i}",
+                "stdin": tc.get("input", ""),
+                "expected_output": tc.get("expected_output", ""),
+                "is_hidden": False,
+                "points": 1,
+            })
+    else:
+        # Use question's public testcases
+        question_public = question.get("coding_data", {}).get("public_testcases") or question.get("public_testcases", [])
+        for i, tc in enumerate(question_public):
+            test_cases.append({
+                "id": f"public_{i}",
+                "stdin": tc.get("input", ""),
+                "expected_output": tc.get("expected_output", ""),
+                "is_hidden": False,
+                "points": 1,
+            })
+
+    # Add hidden test cases
+    if hidden_testcases and len(hidden_testcases) > 0:
+        for i, tc in enumerate(hidden_testcases):
+            test_cases.append({
+                "id": f"hidden_{i}",
+                "stdin": tc.get("input", ""),
+                "expected_output": tc.get("expected_output", ""),
+                "is_hidden": True,
+                "points": 1,
+            })
+    else:
+        # Use question's hidden testcases
+        question_hidden = question.get("coding_data", {}).get("hidden_testcases") or question.get("hidden_testcases", [])
+        for i, tc in enumerate(question_hidden):
+            test_cases.append({
+                "id": f"hidden_{i}",
+                "stdin": tc.get("input", ""),
+                "expected_output": tc.get("expected_output", ""),
+                "is_hidden": True,
+                "points": 1,
+            })
+
+    if not test_cases:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No test cases available")
+
+    try:
+        # Run all test cases
+        results = await run_all_test_cases(
+            source_code=source_code,
+            language_id=int(language_id),
+            test_cases=test_cases,
+            cpu_time_limit=2.0,
+            memory_limit=128000,
+            stop_on_compilation_error=False,
+        )
+
+        # Separate public and hidden results
+        public_results = []
+        hidden_results = []
+        public_passed = 0
+        public_total = 0
+        hidden_passed = 0
+        hidden_total = 0
+
+        all_results = results.get("results", [])
+        for i, result in enumerate(all_results):
+            test_case = test_cases[i]
+            is_hidden = test_case.get("is_hidden", False)
+            
+            result_data = {
+                "input": test_case.get("stdin", ""),
+                "expected": test_case.get("expected_output", ""),
+                "output": result.get("stdout", "").strip(),
+                "passed": result.get("passed", False),
+                "status": result.get("status", ""),
+                "time": result.get("time"),
+                "memory": result.get("memory"),
+            }
+
+            if is_hidden:
+                hidden_results.append(result_data)
+                hidden_total += 1
+                if result.get("passed", False):
+                    hidden_passed += 1
+            else:
+                public_results.append(result_data)
+                public_total += 1
+                if result.get("passed", False):
+                    public_passed += 1
+
+        return success_response(
+            "Code submitted successfully",
+            {
+                "publicResults": public_results,
+                "hiddenResults": hidden_results,  # Include hidden results for backend processing
+                "publicPassed": public_passed,
+                "publicTotal": public_total,
+                "hiddenPassed": hidden_passed,
+                "hiddenTotal": hidden_total,
+                "totalPassed": public_passed + hidden_passed,
+                "totalTests": public_total + hidden_total,
+            }
+        )
+    except Exception as exc:
+        logger.exception(f"Error submitting code for assessment {assessment_id}, question {question_index}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to submit code: {str(exc)}"
         ) from exc
 

@@ -57,9 +57,11 @@ export const authOptions: NextAuthOptions = {
             email: data.user.email,
             role: data.user.role,
             organization: data.user.organization,
+            phone: data.user.phone || undefined,
+            country: data.user.country || undefined,
             token: data.token,
             refreshToken: data.refreshToken, // Store refresh token
-          };
+          } as BackendUser;
           return backendUser;
         } catch (error: any) {
           throw new Error(error?.message ?? "Authentication failed");
@@ -137,9 +139,11 @@ export const authOptions: NextAuthOptions = {
           email: data.user.email,
           role: data.user.role,
           organization: data.user.organization,
+          phone: data.user.phone || undefined,
+          country: data.user.country || undefined,
           token: data.token,
           refreshToken: data.refreshToken, // Store refresh token
-        };
+        } as BackendUser;
 
         Object.assign(user, backendUser);
         console.log("OAuth sign-in successful for:", user.email);
@@ -182,6 +186,8 @@ export const authOptions: NextAuthOptions = {
         token.id = (user as BackendUser).id ?? token.sub;
         token.role = (user as BackendUser).role ?? token.role;
         token.organization = (user as BackendUser).organization ?? token.organization;
+        token.phone = (user as BackendUser).phone ?? token.phone;
+        token.country = (user as BackendUser).country ?? token.country;
         token.backendToken = (user as BackendUser).token ?? token.backendToken;
         token.refreshToken = (user as BackendUser).refreshToken ?? token.refreshToken;
       }
@@ -197,6 +203,8 @@ export const authOptions: NextAuthOptions = {
         (session.user as any).id = token.id as string;
         (session.user as any).role = token.role as string | undefined;
         (session.user as any).organization = token.organization as string | undefined;
+        (session.user as any).phone = token.phone as string | undefined;
+        (session.user as any).country = token.country as string | undefined;
       }
 
       (session as any).backendToken = token.backendToken as string | undefined;
@@ -205,12 +213,10 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
     async redirect({ url, baseUrl }) {
-      // Handle role-based redirects
-      // If redirecting to home page or dashboard, we'll let the pages handle it
-      // This prevents interfering with explicit redirects from signin
+      // Prevent redirecting authenticated users to home page
+      // Always redirect to dashboard instead to avoid flash of landing page
       if (url === `${baseUrl}/` || url === baseUrl) {
-        // If going to home, let home page handle redirect based on role
-        return url;
+        return `${baseUrl}/dashboard`;
       }
       
       // For other URLs, allow them through

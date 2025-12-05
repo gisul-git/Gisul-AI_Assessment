@@ -48,7 +48,6 @@ export default function SignInPage({ providers }: SignInPageProps) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"org_admin" | "editor" | "viewer">("org_admin");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showVerification, setShowVerification] = useState(false);
@@ -157,32 +156,9 @@ export default function SignInPage({ providers }: SignInPageProps) {
       return;
     }
 
-    // Set flag to prevent home page from redirecting
-    if (typeof window !== "undefined") {
-      sessionStorage.setItem("justSignedIn", "true");
-    }
-
-    // Wait a bit for NextAuth to process the session, then redirect based on role
-    // Use a small delay to ensure session is ready
-    setTimeout(async () => {
-      try {
-        const session = await fetch("/api/auth/session").then((res) => res.json());
-        const userRole = session?.user?.role;
-        
-        if (userRole === "super_admin") {
-          window.location.replace("/super-admin");
-        } else if (userRole) {
-          // Explicitly redirect org_admin and other roles to dashboard
-          window.location.replace("/dashboard");
-        } else {
-          // Fallback to callbackUrl if role not available yet
-          window.location.replace(result?.url ?? callbackUrl);
-        }
-      } catch (error) {
-        // If session fetch fails, redirect to dashboard as fallback
-        window.location.replace("/dashboard");
-      }
-    }, 150);
+    // Redirect immediately to dashboard to prevent showing home page
+    // Dashboard will handle role-based redirects if needed (e.g., super_admin)
+    window.location.replace("/dashboard");
   };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -211,32 +187,9 @@ export default function SignInPage({ providers }: SignInPageProps) {
       return;
     }
 
-    // Set flag to prevent home page from redirecting
-    if (typeof window !== "undefined") {
-      sessionStorage.setItem("justSignedIn", "true");
-    }
-
-    // Wait a bit for NextAuth to process the session, then redirect based on role
-    // Use a small delay to ensure session is ready
-    setTimeout(async () => {
-      try {
-        const session = await fetch("/api/auth/session").then((res) => res.json());
-        const userRole = session?.user?.role;
-        
-        if (userRole === "super_admin") {
-          window.location.replace("/super-admin");
-        } else if (userRole) {
-          // Explicitly redirect org_admin and other roles to dashboard
-          window.location.replace("/dashboard");
-        } else {
-          // Fallback to callbackUrl if role not available yet
-          window.location.replace(result?.url ?? callbackUrl);
-        }
-      } catch (error) {
-        // If session fetch fails, redirect to dashboard as fallback
-        window.location.replace("/dashboard");
-      }
-    }, 150);
+    // Redirect immediately to dashboard to prevent showing home page
+    // Dashboard will handle role-based redirects if needed (e.g., super_admin)
+    window.location.replace("/dashboard");
   };
 
   return (
@@ -255,20 +208,6 @@ export default function SignInPage({ providers }: SignInPageProps) {
         <div className="card" style={{ padding: "1.5rem" }}>
           {!showVerification ? (
             <form onSubmit={handleSubmit} style={{ margin: 0 }}>
-              <label htmlFor="role" style={{ fontSize: "0.8125rem", marginTop: 0, marginBottom: "0.375rem" }}>
-                Role
-              </label>
-              <select
-                id="role"
-                value={role}
-                onChange={(event) => setRole(event.target.value as "org_admin" | "editor" | "viewer")}
-                style={{ marginBottom: "0.75rem", padding: "0.625rem 0.75rem", fontSize: "0.875rem" }}
-              >
-                <option value="org_admin">Organization Admin</option>
-                <option value="editor">Editor</option>
-                <option value="viewer">Viewer</option>
-              </select>
-
               <label htmlFor="email" style={{ fontSize: "0.8125rem", marginTop: 0, marginBottom: "0.375rem" }}>
                 Email
               </label>
@@ -403,7 +342,7 @@ export default function SignInPage({ providers }: SignInPageProps) {
             </div>
           )}
 
-          {role === "org_admin" && !showVerification && (
+          {!showVerification && (
             <div style={{ marginTop: "1.25rem", paddingTop: "1.25rem", borderTop: "1px solid #e8e0d0" }}>
               <p style={{ color: "#6b6678", marginBottom: "0.75rem", fontSize: "0.8125rem", textAlign: "center" }}>
                 Or continue with
@@ -476,7 +415,7 @@ export default function SignInPage({ providers }: SignInPageProps) {
           )}
         </div>
 
-        {role === "org_admin" && !showVerification && (
+        {!showVerification && (
           <div style={{ marginTop: "1rem", textAlign: "center", color: "#6b6678" }}>
             <p style={{ fontSize: "0.8125rem", margin: 0 }}>
               Don&apos;t have an account?{" "}

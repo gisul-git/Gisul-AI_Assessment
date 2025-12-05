@@ -5,7 +5,7 @@ import random
 import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
@@ -23,6 +23,7 @@ from ..schemas.auth import (
     OAuthLoginRequest,
     OrgSignupRequest,
     SendVerificationCodeRequest,
+    SuperAdminSignupRequest,
     VerifyEmailCodeRequest,
 )
 from ..utils.email import get_email_service
@@ -131,6 +132,42 @@ async def _send_verification_email(
         raise
 
 
+async def _send_verification_email_async(
+    db: AsyncIOMotorDatabase,
+    email: str,
+    user_name: str | None,
+    code: str,
+    ttl_minutes: int,
+) -> None:
+    """Send verification email asynchronously (for background tasks)."""
+    email_service = get_email_service()
+    subject = "Email Verification Code"
+    html_body = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #2563eb;">Email Verification</h2>
+                <p>Hello {user_name or 'User'},</p>
+                <p>Your email verification code is:</p>
+                <div style="background-color: #f3f4f6; padding: 20px; text-align: center; margin: 20px 0; border-radius: 5px;">
+                    <h1 style="color: #2563eb; margin: 0; font-size: 32px; letter-spacing: 5px;">{code}</h1>
+                </div>
+                <p>This code will expire in {ttl_minutes} minutes.</p>
+                <p>If you didn't request this code, please ignore this email.</p>
+                <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;">
+                <p style="color: #6b7280; font-size: 12px;">This is an automated message, please do not reply.</p>
+            </div>
+        </body>
+    </html>
+    """
+
+    try:
+        await email_service.send_email(email, subject, html_body)
+        logger.info("Verification code sent to %s", email)
+    except Exception as exc:
+        logger.error("Failed to send verification email to %s: %s", email, exc)
+
+
 async def _verify_code(db: AsyncIOMotorDatabase, email: str, code: str) -> bool:
     """Verify the code and mark email as verified if valid."""
     normalized = _normalize_email(email)
@@ -178,6 +215,8 @@ async def _verify_code(db: AsyncIOMotorDatabase, email: str, code: str) -> bool:
             "email": normalized,
             "password": pending_signup.get("password"),
             "role": pending_signup.get("role"),
+            "phone": pending_signup.get("phone"),
+            "country": pending_signup.get("country"),
             "emailVerified": True,
             "emailVerifiedAt": now,
             "createdAt": now,
@@ -253,6 +292,49 @@ async def _find_user_by_email(db: AsyncIOMotorDatabase, email: str) -> dict | No
     return preferred
 
 
+@router.post("/superadmin-signup")
+async def super_admin_signup(
+    payload: SuperAdminSignupRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    email = _normalize_email(payload.email)
+    existing = await _find_user_by_email(db, email)
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Super Admin already exists")
+
+    # Check if there's already a pending signup for this email (and if it's expired)
+    pending = await db.email_verifications.find_one({"email": email, "pendingSignup": {"$exists": True}})
+    if pending:
+        # Check if the pending signup code has expired
+        is_expired = await _check_and_cleanup_expired_verification(db, email)
+        if not is_expired:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification email already sent. Please check your email or wait for it to expire.")
+
+    # Store pending signup data (will be created after verification)
+    pending_signup_data = {
+        "name": sanitize_text_field(payload.name),
+        "password": get_password_hash(payload.password),
+        "role": "super_admin",
+    }
+
+    # Send verification email with pending signup data
+    try:
+        await _send_verification_email(db, email, payload.name, pending_signup_data)
+        logger.info("Verification email sent to super admin: %s", email)
+    except Exception as exc:
+        logger.error("Failed to send verification email to super admin %s: %s", email, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send verification email. Please try again.",
+        ) from exc
+
+    return success_response(
+        "Please check your email for verification code. Account will be created after verification.",
+        {"email": email},
+        status_code=status.HTTP_201_CREATED,
+    )
+
+
 @router.post("/org-signup")
 async def org_signup_google(
     payload: GoogleSignupRequest,
@@ -289,6 +371,8 @@ async def org_signup_google(
         "email": email,
         "googleId": google_id,
         "role": "org_admin",
+        "phone": None,
+        "country": None,
         "emailVerified": True,  # Google OAuth emails are pre-verified
         "createdAt": datetime.now(timezone.utc),
     }
@@ -296,7 +380,7 @@ async def org_signup_google(
 
     return success_response(
         "Signup successful. You can sign in now.",
-        {"email": email, "role": "org_admin"},
+        {"email": email},
         status_code=status.HTTP_201_CREATED,
     )
 
@@ -391,6 +475,8 @@ def _build_login_success_response(user: dict) -> JSONResponse:
                 "email": user_data.get("email"),
                 "role": user_data.get("role"),
                 "organization": user_data.get("organization"),
+                "phone": user_data.get("phone"),
+                "country": user_data.get("country"),
             },
         },
     )
@@ -589,6 +675,7 @@ async def email_login(
 
 @router.post("/org-signup-email")
 async def org_signup_email(
+    background_tasks: BackgroundTasks,
     payload: OrgSignupRequest,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
@@ -609,22 +696,23 @@ async def org_signup_email(
         "name": sanitize_text_field(payload.name),
         "password": get_password_hash(payload.password),
         "role": "org_admin",
+        "phone": sanitize_text_field(payload.phone) if payload.phone else None,
+        "country": sanitize_text_field(payload.country) if payload.country else None,
     }
 
-    # Send verification email with pending signup data
-    try:
-        await _send_verification_email(db, email, payload.name, pending_signup_data)
-        logger.info("Verification email sent to user: %s", email)
-    except Exception as exc:
-        logger.error("Failed to send verification email to user %s: %s", email, exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to send verification email. Please try again.",
-        ) from exc
+    # Generate verification code and store it immediately (before sending email)
+    code = _generate_verification_code()
+    settings = get_settings()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.email_verification_code_ttl_minutes)
+    await _store_verification_code(db, email, code, expires_at, pending_signup_data)
+
+    # Send verification email in background (non-blocking)
+    background_tasks.add_task(_send_verification_email_async, db, email, payload.name, code, settings.email_verification_code_ttl_minutes)
+    logger.info("Verification email queued for user: %s", email)
 
     return success_response(
         "Please check your email for verification code. Account will be created after verification.",
-        {"email": email, "role": "org_admin"},
+        {"email": email},
         status_code=status.HTTP_201_CREATED,
     )
 

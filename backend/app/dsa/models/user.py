@@ -36,3 +36,4 @@ class LeaderboardEntry(BaseModel):
     questions_solved: int
     rank: Optional[int] = None
 
+

@@ -12,12 +12,15 @@ The admin specifies which languages to generate starter code for.
 
 import os
 import json
+import logging
 from dotenv import load_dotenv
 from typing import Dict, Any, List, Optional
 
 from openai import OpenAI
 
 load_dotenv()
+
+logger = logging.getLogger("backend")
 
 
 async def generate_question(
@@ -126,7 +129,12 @@ CRITICAL REQUIREMENTS:
 2. "examples" should have at least 2-3 examples with input, output, and optional explanation
 3. "constraints" should list all input constraints like LeetCode
 4. Generate at least 3 public testcases and 3 hidden testcases
-5. Testcases must have exact stdin input and expected stdout output
+5. Testcases MUST be in Judge0-compatible format:
+   - "input": exact stdin input (what the program reads from stdin)
+   - "expected_output": exact stdout output (what the program should write to stdout)
+   - Testcases support: Read stdin, Write to stdout, Static text comparison, Run code in many languages
+   - Input/output must be exact strings that Judge0 can compare directly
+   - For example: input="5\n1 2 3 4 5", expected_output="15" (for sum of array)
 6. "function_signature" MUST be included with:
    - "name": appropriate function name (e.g., "twoSum", "isPrime", "reverseString")
    - "parameters": array of {{"name": "paramName", "type": "int|string|boolean|int[]|string[]"}}
@@ -134,6 +142,7 @@ CRITICAL REQUIREMENTS:
 7. Starter code MUST be generated for ALL languages in the languages list
 8. Starter code should use the function name, parameters, and return type from function_signature
 9. Hidden testcases should cover edge cases
+10. All testcases must be compatible with Judge0 execution (stdin/stdout format only)
 
 IMPORTANT: Return ONLY valid JSON. No markdown code blocks, no explanations, just the JSON object."""
 
@@ -151,18 +160,47 @@ IMPORTANT: Return ONLY valid JSON. No markdown code blocks, no explanations, jus
             temperature=0.8,
         )
         
+        # Get content from response
+        if not response.choices or not response.choices[0].message.content:
+            raise ValueError("OpenAI API returned empty response")
+        
         content = response.choices[0].message.content.strip()
+        
+        # Log raw content for debugging (first 500 chars)
+        logger.info(f"Raw AI response (first 500 chars): {content[:500]}")
+        
+        if not content:
+            raise ValueError("OpenAI API returned empty content")
         
         # Remove markdown code blocks if present
         if content.startswith("```json"):
             content = content[7:]
-        if content.startswith("```"):
+        elif content.startswith("```"):
             content = content[3:]
         if content.endswith("```"):
             content = content[:-3]
         content = content.strip()
         
-        question_data = json.loads(content)
+        # Try to extract JSON if there's extra text
+        # Look for JSON object boundaries
+        json_start = content.find("{")
+        json_end = content.rfind("}") + 1
+        
+        if json_start >= 0 and json_end > json_start:
+            content = content[json_start:json_end]
+        
+        if not content:
+            raise ValueError("No JSON content found in AI response")
+        
+        # Try to parse JSON
+        try:
+            question_data = json.loads(content)
+        except json.JSONDecodeError as json_err:
+            # Log the problematic content for debugging
+            logger.error(f"Failed to parse JSON. Content length: {len(content)}")
+            logger.error(f"Content preview: {content[:200]}...")
+            logger.error(f"JSON error: {json_err}")
+            raise ValueError(f"Failed to parse AI response as JSON: {json_err}. Content preview: {content[:200]}")
         
         # Validate required fields
         required_fields = ["title", "description", "difficulty", "languages", "public_testcases", "hidden_testcases", "starter_code", "function_signature"]

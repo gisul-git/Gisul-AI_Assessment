@@ -21,36 +21,42 @@ export default function HomePage() {
 
   useEffect(() => {
     // Only redirect authenticated users away from home page
-    // Add a small delay to prevent race conditions with signin redirects
+    // Redirect immediately to prevent showing landing page
     if (status === "authenticated") {
-      const redirectTimer = setTimeout(async () => {
+      // Check if we just signed in (session storage flag set by signin page)
+      const justSignedIn = typeof window !== "undefined" && 
+        sessionStorage.getItem("justSignedIn") === "true";
+      
+      // If we just signed in, clear the flag and redirect immediately
+      if (justSignedIn) {
+        sessionStorage.removeItem("justSignedIn");
+        // Redirect immediately to dashboard - signin page will handle role-based redirect
+        router.replace("/dashboard");
+        return;
+      }
+      
+      // For other authenticated users, redirect immediately based on role
+      const redirectImmediately = async () => {
         try {
-          // Check if we just signed in (session storage flag set by signin page)
-          const justSignedIn = typeof window !== "undefined" && 
-            sessionStorage.getItem("justSignedIn") === "true";
-          
-          // If we just signed in, clear the flag and let signin page handle redirect
-          if (justSignedIn) {
-            sessionStorage.removeItem("justSignedIn");
-            return; // Don't redirect, signin page will handle it
-          }
-          
           const session = await fetch("/api/auth/session").then((res) => res.json());
           const userRole = session?.user?.role;
           
           if (userRole === "super_admin") {
             router.replace("/super-admin");
           } else if (userRole) {
-            // Only redirect if we have a role (org_admin, editor, viewer, etc.)
+            router.replace("/dashboard");
+          } else {
+            // Fallback to dashboard if role not available
             router.replace("/dashboard");
           }
         } catch (error) {
-          // If session fetch fails, don't redirect (let user stay on home page)
+          // If session fetch fails, redirect to dashboard as fallback
           console.error("Failed to fetch session for redirect:", error);
+          router.replace("/dashboard");
         }
-      }, 200); // Small delay to allow signin redirects to complete
+      };
       
-      return () => clearTimeout(redirectTimer);
+      redirectImmediately();
     }
   }, [status, router]);
 

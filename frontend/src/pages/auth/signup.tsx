@@ -6,6 +6,59 @@ import { getProviders, signIn } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
 import fastApiClient from "../../lib/fastapi";
+import { sortedCountryCodes, getCountryNameFromCode } from "../../lib/countryCodes";
+
+// Phone number validation based on country code
+const validatePhoneNumber = (phone: string, countryCode: string): { valid: boolean; error?: string } => {
+  const phoneDigits = phone.replace(/\D/g, "");
+  
+  if (!phoneDigits) {
+    return { valid: false, error: "Phone number is required" };
+  }
+
+  // Common phone number length validations by country code
+  const phoneRules: { [key: string]: { min: number; max: number; pattern?: RegExp } } = {
+    "+1": { min: 10, max: 10 }, // US/Canada
+    "+91": { min: 10, max: 10, pattern: /^[6-9]\d{9}$/ }, // India (starts with 6-9)
+    "+44": { min: 10, max: 10 }, // UK
+    "+86": { min: 11, max: 11 }, // China
+    "+81": { min: 10, max: 11 }, // Japan
+    "+49": { min: 10, max: 11 }, // Germany
+    "+33": { min: 9, max: 9 }, // France
+    "+39": { min: 9, max: 10 }, // Italy
+    "+34": { min: 9, max: 9 }, // Spain
+    "+61": { min: 9, max: 9 }, // Australia
+    "+55": { min: 10, max: 11 }, // Brazil
+    "+52": { min: 10, max: 10 }, // Mexico
+    "+7": { min: 10, max: 10 }, // Russia
+    "+82": { min: 9, max: 11 }, // South Korea
+    "+65": { min: 8, max: 8 }, // Singapore
+    "+971": { min: 9, max: 9 }, // UAE
+    "+966": { min: 9, max: 9 }, // Saudi Arabia
+  };
+
+  const rule = phoneRules[countryCode];
+  
+  if (!rule) {
+    // Default validation for countries not in the list
+    if (phoneDigits.length < 7 || phoneDigits.length > 15) {
+      return { valid: false, error: `Phone number format doesn't match ${getCountryNameFromCode(countryCode)}` };
+    }
+    return { valid: true };
+  }
+
+  // Check length
+  if (phoneDigits.length < rule.min || phoneDigits.length > rule.max) {
+    return { valid: false, error: `Phone number format doesn't match ${getCountryNameFromCode(countryCode)}` };
+  }
+
+  // Check pattern if available
+  if (rule.pattern && !rule.pattern.test(phoneDigits)) {
+    return { valid: false, error: `Phone number format doesn't match ${getCountryNameFromCode(countryCode)}` };
+  }
+
+  return { valid: true };
+};
 
 interface StatusMessage {
   type: "success" | "error";
@@ -56,6 +109,10 @@ export default function SignupPage({ providers }: SignupPageProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [phoneCountryCode, setPhoneCountryCode] = useState("+91");
+  const [phone, setPhone] = useState("");
+  const [country, setCountry] = useState("India");
+  const [phoneError, setPhoneError] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<StatusMessage | null>(null);
   const [showVerification, setShowVerification] = useState(false);
@@ -76,6 +133,7 @@ export default function SignupPage({ providers }: SignupPageProps) {
     setTimeout(() => setMessage(null), 6000);
   };
 
+<<<<<<< Updated upstream
   // Check for OAuth errors in URL (from NextAuth callback)
   useEffect(() => {
     const error = router.query.error as string | undefined;
@@ -105,6 +163,12 @@ export default function SignupPage({ providers }: SignupPageProps) {
       router.replace("/auth/signup", undefined, { shallow: true });
     }
   }, [router.query.error, router]);
+=======
+  // Set country based on default country code on mount
+  useEffect(() => {
+    setCountry(getCountryNameFromCode(phoneCountryCode));
+  }, []);
+>>>>>>> Stashed changes
 
   // Countdown timer effect
   useEffect(() => {
@@ -188,6 +252,21 @@ export default function SignupPage({ providers }: SignupPageProps) {
 
   const onSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    
+    // Validate phone number
+    if (!phone.trim()) {
+      setPhoneError("Phone number is required");
+      showMessage("error", "Phone number is required");
+      return;
+    }
+
+    const phoneValidation = validatePhoneNumber(phone, phoneCountryCode);
+    if (!phoneValidation.valid) {
+      setPhoneError(phoneValidation.error || "");
+      showMessage("error", phoneValidation.error || "Invalid phone number format");
+      return;
+    }
+    
     if (password !== confirmPassword) {
       showMessage("error", "Passwords do not match");
       return;
@@ -196,10 +275,13 @@ export default function SignupPage({ providers }: SignupPageProps) {
     try {
       setLoading(true);
       setMessage(null);
+      setPhoneError("");
       const { data } = await axios.post("/api/auth/signup", {
         name,
         email,
         password,
+        phone: phone.trim() ? `${phoneCountryCode} ${phone.trim()}` : undefined,
+        country: country.trim() || undefined,
       });
       setShowVerification(true);
       setMessage({
@@ -281,6 +363,95 @@ export default function SignupPage({ providers }: SignupPageProps) {
                   style={{ marginBottom: "0.5rem", padding: "0.5rem 0.75rem", fontSize: "0.875rem" }}
                 />
 
+                <label htmlFor="phone" style={{ fontSize: "0.8125rem", marginTop: 0, marginBottom: "0.25rem" }}>
+                  Phone Number
+                </label>
+                <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
+                  <select
+                    id="phoneCountryCode"
+                    value={phoneCountryCode}
+                    onChange={(event) => {
+                      const selectedCode = event.target.value;
+                      setPhoneCountryCode(selectedCode);
+                      setCountry(getCountryNameFromCode(selectedCode));
+                      // Re-validate phone number when country code changes
+                      if (phone.trim()) {
+                        const validation = validatePhoneNumber(phone, selectedCode);
+                        if (!validation.valid) {
+                          setPhoneError(validation.error || "");
+                        } else {
+                          setPhoneError("");
+                        }
+                      }
+                    }}
+                    style={{
+                      padding: "0.5rem 0.75rem",
+                      fontSize: "0.875rem",
+                      border: "1px solid #e8e0d0",
+                      borderRadius: "0.5rem",
+                      backgroundColor: "#ffffff",
+                      cursor: "pointer",
+                      width: "180px",
+                    }}
+                  >
+                    {sortedCountryCodes.map((country) => (
+                      <option key={country.code} value={country.code}>
+                        {country.code} {country.country}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    id="phone"
+                    type="tel"
+                    required
+                    value={phone}
+                    onChange={(event) => {
+                      const value = event.target.value.replace(/\D/g, "");
+                      setPhone(value);
+                      // Validate on change
+                      if (value.trim()) {
+                        const validation = validatePhoneNumber(value, phoneCountryCode);
+                        if (!validation.valid) {
+                          setPhoneError(validation.error || "");
+                        } else {
+                          setPhoneError("");
+                        }
+                      } else {
+                        setPhoneError("");
+                      }
+                    }}
+                    onBlur={() => {
+                      if (phone.trim()) {
+                        const validation = validatePhoneNumber(phone, phoneCountryCode);
+                        if (!validation.valid) {
+                          setPhoneError(validation.error || "");
+                        } else {
+                          setPhoneError("");
+                        }
+                      }
+                    }}
+                    placeholder="234 567 8900"
+                    style={{
+                      flex: 1,
+                      padding: "0.5rem 0.75rem",
+                      fontSize: "0.875rem",
+                      border: phoneError ? "1px solid #ef4444" : "1px solid #e8e0d0",
+                      borderRadius: "0.5rem",
+                    }}
+                  />
+                </div>
+                {phoneError && (
+                  <div style={{ color: "#ef4444", fontSize: "0.75rem", marginTop: "-0.25rem", marginBottom: "0.5rem" }}>
+                    {phoneError}
+                  </div>
+                )}
+
+                <input
+                  id="country"
+                  type="hidden"
+                  value={country}
+                />
+
                 {message && (
                   <div
                     className={`alert ${message.type === "success" ? "alert-success" : "alert-error"}`}
@@ -293,8 +464,15 @@ export default function SignupPage({ providers }: SignupPageProps) {
                 <button
                   type="submit"
                   className="btn-primary"
-                  disabled={loading}
-                  style={{ width: "100%", marginTop: "0.25rem", padding: "0.625rem", fontSize: "0.875rem" }}
+                  disabled={loading || !phone.trim()}
+                  style={{ 
+                    width: "100%", 
+                    marginTop: "0.25rem", 
+                    padding: "0.625rem", 
+                    fontSize: "0.875rem",
+                    opacity: (!phone.trim() && !loading) ? 0.6 : 1,
+                    cursor: (!phone.trim() && !loading) ? "not-allowed" : "pointer",
+                  }}
                 >
                   {loading ? "Submitting..." : "Sign Up"}
                 </button>

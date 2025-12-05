@@ -37,9 +37,27 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
   const [assessments, setAssessments] = useState<Assessment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showProfile, setShowProfile] = useState(false);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [loadingProfile, setLoadingProfile] = useState(false);
 
-  const role = (activeSession?.user as any)?.role ?? "unknown";
-  const isOrgAdmin = role === "org_admin";
+
+  useEffect(() => {
+    // Close profile dropdown when clicking outside
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (showProfile && !target.closest('[data-profile-dropdown]')) {
+        setShowProfile(false);
+      }
+    };
+
+    if (showProfile) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [showProfile]);
 
   useEffect(() => {
     // Listen for token refresh events from the interceptor
@@ -88,10 +106,24 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
       setLoading(true);
       setError(null);
       
+      // CRITICAL: Clear any cached/stale assessments first
+      setAssessments([]);
+      
+      // Get current user ID - try multiple sources
+      const currentUserId = (session?.user as any)?.id || (activeSession?.user as any)?.id;
+      console.log(`[Dashboard] Fetching assessments for user_id: ${currentUserId}`);
+      console.log(`[Dashboard] Session user:`, session?.user);
+      console.log(`[Dashboard] Active session user:`, activeSession?.user);
+      
+      if (!currentUserId) {
+        console.error("[Dashboard] CRITICAL: No user ID found in session - cannot filter DSA tests securely");
+      }
+      
       // Fetch both regular assessments and DSA tests in parallel
+      // CRITICAL: DSA tests endpoint filters by created_by automatically via authentication
       const [assessmentsResponse, dsaTestsResponse] = await Promise.allSettled([
         axios.get("/api/assessments/list"),
-        dsaApi.get("/tests")
+        dsaApi.get("/tests/", { params: { active_only: false } })  // Explicit trailing slash and params
       ]);
       
       const allAssessments: Assessment[] = [];
@@ -109,24 +141,61 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
       
       // Process DSA tests
       if (dsaTestsResponse.status === 'fulfilled' && Array.isArray(dsaTestsResponse.value.data)) {
-        const dsaTests = dsaTestsResponse.value.data.map((test: any) => ({
-          id: test.id || test._id,
-          title: test.title || 'Untitled DSA Test',
-          status: test.is_published ? 'published' : 'draft',
-          hasSchedule: !!(test.start_time && test.end_time),
-          scheduleStatus: test.start_time && test.end_time ? {
-            startTime: test.start_time,
-            endTime: test.end_time,
-            duration: test.duration_minutes || 0,
-            isActive: test.is_active || false
-          } : null,
-          createdAt: test.created_at || null,
-          updatedAt: test.updated_at || null,
-          type: 'dsa' as const
-        }));
-        allAssessments.push(...dsaTests);
+        const rawDsaTests = dsaTestsResponse.value.data;
+        console.log(`[Dashboard] Received ${rawDsaTests.length} DSA tests from backend`);
+        console.log(`[Dashboard] Raw DSA tests:`, rawDsaTests.map((t: any) => ({ id: t.id, title: t.title, created_by: t.created_by })));
+        
+        // CRITICAL SECURITY: Client-side filter to ensure we only show tests that belong to current user
+        // This is a defense-in-depth measure - backend should already filter, but this ensures safety
+        if (!currentUserId) {
+          console.error("[Dashboard] SECURITY: No user ID available - NOT showing any DSA tests (fail secure)");
+        } else {
+          const dsaTests = rawDsaTests
+            .filter((test: any) => {
+              const testCreatedBy = test.created_by;
+              if (!testCreatedBy) {
+                console.warn(`[Dashboard] SECURITY: Test ${test.id || test._id} has no created_by field - hiding it`);
+                return false;
+              }
+              
+              if (!currentUserId) {
+                console.warn(`[Dashboard] SECURITY: Cannot verify ownership - hiding test ${test.id || test._id}`);
+                return false;
+              }
+              
+              const testCreatedByStr = String(testCreatedBy).trim();
+              const currentUserIdStr = String(currentUserId).trim();
+              const matches = testCreatedByStr === currentUserIdStr;
+              
+              if (!matches) {
+                console.error(`[Dashboard] SECURITY: Filtered out test ${test.id || test._id} (${test.title}) - created_by='${testCreatedByStr}' != user_id='${currentUserIdStr}'`);
+              } else {
+                console.log(`[Dashboard] Test ${test.id || test._id} (${test.title}) belongs to current user - showing it`);
+              }
+              
+              return matches;
+            })
+            .map((test: any) => ({
+              id: test.id || test._id,
+              title: test.title || 'Untitled DSA Test',
+              status: test.is_published ? 'published' : 'draft',
+              hasSchedule: !!(test.start_time && test.end_time),
+              scheduleStatus: test.start_time && test.end_time ? {
+                startTime: test.start_time,
+                endTime: test.end_time,
+                duration: test.duration_minutes || 0,
+                isActive: test.is_active || false
+              } : null,
+              createdAt: test.created_at || null,
+              updatedAt: test.updated_at || null,
+              type: 'dsa' as const
+            }));
+          allAssessments.push(...dsaTests);
+          console.log(`[Dashboard] Loaded ${dsaTests.length} DSA tests for current user (filtered from ${rawDsaTests.length} total from backend)`);
+        }
       } else if (dsaTestsResponse.status === 'rejected') {
         console.error("Error fetching DSA tests:", dsaTestsResponse.reason);
+        console.error("DSA tests response error details:", dsaTestsResponse.reason?.response?.data);
       }
       
       // Sort by creation date (newest first)
@@ -208,6 +277,44 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
     }
   };
 
+  const fetchUserProfile = async () => {
+    // First, try to use session data if available (faster)
+    if (activeSession?.user) {
+      const sessionUser = activeSession.user as any;
+      if (sessionUser.name || sessionUser.email) {
+        // Use session data immediately, then fetch full profile in background
+        setUserProfile({
+          name: sessionUser.name,
+          email: sessionUser.email,
+          phone: sessionUser.phone,
+          country: sessionUser.country,
+        });
+      }
+    }
+
+    try {
+      setLoadingProfile(true);
+      const response = await axios.get("/api/users/me");
+      if (response.data?.success && response.data?.data) {
+        setUserProfile(response.data.data);
+      }
+    } catch (err: any) {
+      console.error("Error fetching user profile:", err);
+      // If API fails but we have session data, keep using it
+      if (!userProfile && activeSession?.user) {
+        const sessionUser = activeSession.user as any;
+        setUserProfile({
+          name: sessionUser.name,
+          email: sessionUser.email,
+          phone: sessionUser.phone,
+          country: sessionUser.country,
+        });
+      }
+    } finally {
+      setLoadingProfile(false);
+    }
+  };
+
   return (
     <div style={{ backgroundColor: "#ffffff", minHeight: "100vh" }}>
       <header className="enterprise-header">
@@ -228,29 +335,95 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
               priority
             />
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0 }}>
-            <span className="mobile-hidden" style={{ fontSize: "0.875rem", opacity: 0.9 }}>
-              {activeSession?.user?.email}
-            </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0, position: "relative" }}>
             <button
               type="button"
-              onClick={async () => {
-                await signOut({ redirect: false });
-                window.location.href = "/auth/signin";
+              onClick={() => {
+                const newShowState = !showProfile;
+                setShowProfile(newShowState);
+                if (newShowState) {
+                  // If we don't have profile data or session has more info, fetch it
+                  if (!userProfile || (activeSession?.user && !userProfile.phone && !userProfile.country)) {
+                    fetchUserProfile();
+                  }
+                }
               }}
-              className="btn-secondary"
               style={{
                 marginTop: 0,
-                padding: "0.5rem 1rem",
-                fontSize: "0.8125rem",
+                padding: "0.5rem",
+                fontSize: "1.25rem",
                 backgroundColor: "rgba(255, 255, 255, 0.2)",
-                borderColor: "rgba(255, 255, 255, 0.3)",
+                border: "1px solid rgba(255, 255, 255, 0.3)",
+                borderRadius: "50%",
                 color: "#ffffff",
-                whiteSpace: "nowrap",
+                width: "40px",
+                height: "40px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                transition: "background-color 0.2s",
               }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.3)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.2)";
+              }}
+              title={activeSession?.user?.name || activeSession?.user?.email || "Profile"}
             >
-              Sign Out
+              👤
             </button>
+            {showProfile && (
+              <div
+                data-profile-dropdown
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  right: 0,
+                  marginTop: "0.5rem",
+                  backgroundColor: "#ffffff",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "0.5rem",
+                  boxShadow: "0 4px 6px rgba(0, 0, 0, 0.1)",
+                  minWidth: "250px",
+                  zIndex: 1000,
+                  padding: "1rem",
+                }}
+              >
+                {loadingProfile && !userProfile ? (
+                  <div style={{ textAlign: "center", padding: "1rem" }}>Loading...</div>
+                ) : userProfile ? (
+                  <div>
+                    <div style={{ marginBottom: "1rem", paddingBottom: "1rem", borderBottom: "1px solid #e2e8f0" }}>
+                      <div style={{ fontWeight: 600, fontSize: "1rem", color: "#1a1625", marginBottom: "0.25rem" }}>
+                        {userProfile.name || "User"}
+                      </div>
+                      <div style={{ fontSize: "0.875rem", color: "#64748b" }}>{userProfile.email}</div>
+                    </div>
+                    <div style={{ fontSize: "0.875rem", color: "#1e293b", marginBottom: "0.5rem" }}>
+                      <div><strong>Phone:</strong> {userProfile.phone || "Not provided"}</div>
+                      <div><strong>Country:</strong> {userProfile.country || "Not provided"}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => signOut({ callbackUrl: "/auth/signin" })}
+                      className="btn-secondary"
+                      style={{
+                        width: "100%",
+                        marginTop: "0.5rem",
+                        padding: "0.5rem 1rem",
+                        fontSize: "0.875rem",
+                      }}
+                    >
+                      Sign Out
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ textAlign: "center", padding: "1rem" }}>Failed to load profile</div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -263,14 +436,22 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                 Assessments Dashboard
               </h1>
               <p style={{ color: "#2D7A52", margin: 0, fontSize: "0.875rem" }}>
-                Signed in as <strong>{activeSession?.user?.email}</strong> • Role:{" "}
-                <span className="badge badge-mint" style={{ marginLeft: "0.25rem" }}>
-                  {role}
-                </span>
+                Signed in as <strong>{activeSession?.user?.name || activeSession?.user?.email || "User"}</strong>
               </p>
             </div>
             <div style={{ display: "flex", gap: "1rem", width: "100%" }}>
-              <Link href="/assessments/create-new" style={{ flex: 1 }}>
+              <Link 
+                href="/assessments/create-new" 
+                style={{ flex: 1 }}
+                onClick={() => {
+                  // Clear any draft from localStorage to ensure a fresh start
+                  try {
+                    localStorage.removeItem('currentDraftAssessmentId');
+                  } catch (err) {
+                    console.error("Error clearing draft ID:", err);
+                  }
+                }}
+              >
               <button type="button" className="btn-primary" style={{ marginTop: 0, width: "100%" }}>
                 + Create New Assessment
               </button>
@@ -323,7 +504,17 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                 Create your first assessment to get started with AI-powered topic and question
                 generation.
               </p>
-              <Link href="/assessments/create-new">
+              <Link 
+                href="/assessments/create-new"
+                onClick={() => {
+                  // Clear any draft from localStorage to ensure a fresh start
+                  try {
+                    localStorage.removeItem('currentDraftAssessmentId');
+                  } catch (err) {
+                    console.error("Error clearing draft ID:", err);
+                  }
+                }}
+              >
                 <button type="button" className="btn-primary" style={{ marginTop: 0 }}>
                   Create Your First Assessment
                 </button>
@@ -366,8 +557,10 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                     onClick={() => {
                       if (assessment.type === 'dsa') {
                         router.push(`/dsa/tests`);
+                      } else if (assessment.status === 'draft') {
+                        router.push(`/assessments/create-new?id=${assessment.id}`);
                       } else {
-                        router.push(`/assessments/${assessment.id}`);
+                        router.push(`/assessments/${assessment.id}/analytics`);
                       }
                     }}
                   >
@@ -433,26 +626,60 @@ export default function DashboardPage({ session: serverSession }: DashboardPageP
                       )}
                     </div>
                     <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem", paddingTop: "1rem", borderTop: "1px solid #E8FAF0" }}>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        style={{
-                          fontSize: "0.875rem",
-                          padding: "0.5rem 1rem",
-                          marginTop: 0,
-                          width: "100%",
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (assessment.type === 'dsa') {
-                            router.push(`/dsa/tests`);
-                          } else {
-                            router.push(`/assessments/${assessment.id}`);
-                          }
-                        }}
-                      >
-                        View
-                      </button>
+                      {assessment.status === 'draft' && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{
+                            fontSize: "0.875rem",
+                            padding: "0.5rem 1rem",
+                            marginTop: 0,
+                            width: "100%",
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/assessments/create-new?id=${assessment.id}`);
+                          }}
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {assessment.type !== 'dsa' && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{
+                            fontSize: "0.875rem",
+                            padding: "0.5rem 1rem",
+                            marginTop: 0,
+                            width: "100%",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "0.5rem",
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/assessments/${assessment.id}/analytics`);
+                          }}
+                        >
+                          <svg 
+                            width="16" 
+                            height="16" 
+                            viewBox="0 0 24 24" 
+                            fill="none" 
+                            stroke="currentColor" 
+                            strokeWidth="2" 
+                            strokeLinecap="round" 
+                            strokeLinejoin="round"
+                          >
+                            <line x1="18" y1="20" x2="18" y2="10" />
+                            <line x1="12" y1="20" x2="12" y2="4" />
+                            <line x1="6" y1="20" x2="6" y2="14" />
+                          </svg>
+                          Analytics
+                        </button>
+                      )}
                       <button
                         type="button"
                         style={{

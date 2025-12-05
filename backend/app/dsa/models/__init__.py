@@ -10,3 +10,4 @@ __all__ = [
     "User", "UserCreate", "UserLogin", "LeaderboardEntry",
 ]
 
+
