@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from ..db.mongo import get_db
 from ..schemas.proctor import ProctorEventIn, ProctorSummaryOut, EVENT_TYPE_LABELS
 from ..utils.responses import success_response
+from ..utils.mongo import to_object_id
 
 logger = logging.getLogger(__name__)
 
@@ -439,6 +440,7 @@ async def get_all_sessions(
     """
     Get all active proctoring sessions for an assessment.
     Used by the multi-proctor dashboard to display all candidate streams.
+    Excludes sessions for candidates who have already submitted.
     """
     try:
         sessions = await db.proctor_sessions.find({
@@ -449,6 +451,48 @@ async def get_all_sessions(
         # Convert ObjectId to string
         for session in sessions:
             session["_id"] = str(session["_id"])
+        
+        # Filter out sessions for candidates who have submitted
+        # Check assessment's candidateResponses to see if candidate has submittedAt
+        try:
+            try:
+                assessment_oid = to_object_id(assessment_id)
+            except ValueError:
+                logger.warning(f"[LiveProctor] Invalid assessment ID format: {assessment_id}, skipping submission check")
+                assessment_oid = None
+            
+            if assessment_oid:
+                assessment = await db.assessments.find_one({"_id": assessment_oid})
+                
+                if assessment and assessment.get("candidateResponses"):
+                    candidate_responses = assessment.get("candidateResponses", {})
+                    submitted_candidates = set()
+                    
+                    # Extract submitted candidate emails (normalize to lowercase)
+                    for response_key, response_data in candidate_responses.items():
+                        if isinstance(response_data, dict) and response_data.get("submittedAt"):
+                            email = response_data.get("email", "")
+                            if email:
+                                submitted_candidates.add(email.strip().lower())
+                    
+                    # Filter out sessions for submitted candidates
+                    if submitted_candidates:
+                        active_sessions = []
+                        for session in sessions:
+                            candidate_id = session.get("candidateId", "")
+                            candidate_email = candidate_id.strip().lower() if candidate_id else ""
+                            
+                            if candidate_email and candidate_email in submitted_candidates:
+                                logger.info(f"[LiveProctor] Filtering out session for submitted candidate: {candidate_email}")
+                                continue
+                            
+                            active_sessions.append(session)
+                        
+                        sessions = active_sessions
+                        logger.info(f"[LiveProctor] Filtered out {len(submitted_candidates)} submitted candidates, {len(sessions)} active sessions remaining")
+        except Exception as filter_exc:
+            logger.warning(f"[LiveProctor] Error filtering submitted candidates, using all sessions: {filter_exc}")
+            # If filtering fails, continue with all sessions (fail-safe)
         
         return success_response("Sessions retrieved", {
             "count": len(sessions),
@@ -587,13 +631,18 @@ async def get_proctor_logs(
             "userId": userId.strip(),
         }
         
-        cursor = db.proctor_events.find(query).sort("timestamp", -1)
-        logs = []
+        # Use to_list with a reasonable limit to avoid timeout
+        # Limit to 1000 most recent logs to prevent timeout issues
+        cursor = db.proctor_events.find(query).sort("timestamp", -1).limit(1000)
+        logs = await cursor.to_list(length=1000)
         
-        async for doc in cursor:
-            # Convert ObjectId to string for JSON serialization
+        # Convert ObjectId to string for JSON serialization
+        for doc in logs:
             doc["_id"] = str(doc["_id"])
-            logs.append(doc)
+            # Ensure snapshotBase64 is properly formatted if present
+            if doc.get("snapshotBase64") and not doc["snapshotBase64"].startswith("data:"):
+                # If it's raw base64, add data URI prefix (assume PNG format)
+                doc["snapshotBase64"] = f"data:image/png;base64,{doc['snapshotBase64']}"
         
         logger.info(
             f"[Proctor API] Logs fetched for user {userId} in assessment {assessmentId}: "

@@ -562,6 +562,12 @@ async def submit_code(
             "unknown"
         )
         
+        # Get starter code for the language
+        starter_code = None
+        starter_code_dict = question.get("starter_code", {})
+        if isinstance(starter_code_dict, dict):
+            starter_code = starter_code_dict.get(language_name) or starter_code_dict.get(language_name.lower())
+        
         # Generate AI feedback (async in background ideally, but sync for now)
         try:
             all_test_results = public_results + full_hidden_results
@@ -578,6 +584,7 @@ async def submit_code(
                 public_total=len(public_test_cases),
                 hidden_passed=hidden_passed,
                 hidden_total=hidden_total,
+                starter_code=starter_code,
             )
             logger.info(f"Generated AI feedback for submission")
         except Exception as e:

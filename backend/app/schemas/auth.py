@@ -29,6 +29,8 @@ class OrgSignupRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=255, description="Password must be at least 8 characters")
+    phone: str | None = Field(default=None, max_length=50, description="Optional phone number")
+    country: str | None = Field(default=None, max_length=100, description="Optional country")
     
     @field_validator("password")
     @classmethod

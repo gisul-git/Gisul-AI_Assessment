@@ -808,6 +808,13 @@ async def final_submit_test(
         ai_feedback = None
         try:
             all_test_results = public_results + full_hidden_results
+            
+            # Get starter code for the language
+            starter_code = None
+            starter_code_dict = question.get("starter_code", {})
+            if isinstance(starter_code_dict, dict):
+                starter_code = starter_code_dict.get(q_sub.language) or starter_code_dict.get(q_sub.language.lower())
+            
             ai_feedback = generate_code_feedback(
                 source_code=q_sub.code,
                 language=q_sub.language,
@@ -821,6 +828,7 @@ async def final_submit_test(
                 public_total=public_total,
                 hidden_passed=hidden_passed,
                 hidden_total=hidden_total,
+                starter_code=starter_code,
             )
             logger.info(f"Generated AI feedback for question {question_id} with {total_passed}/{total_tests} tests passed")
         except Exception as e:

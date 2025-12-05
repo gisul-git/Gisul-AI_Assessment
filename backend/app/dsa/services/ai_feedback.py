@@ -22,6 +22,79 @@ import logging
 from typing import Dict, Any, List, Optional
 from openai import OpenAI
 
+
+def normalize_code(code: str) -> str:
+    """
+    Normalize code for comparison by:
+    - Removing all whitespace (spaces, tabs, newlines)
+    - Removing comments
+    - Converting to lowercase
+    - Removing common placeholder patterns
+    """
+    if not code:
+        return ""
+    
+    # Remove single-line comments (language-agnostic)
+    lines = code.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # Remove comments (//, #, --, etc.)
+        line = re.sub(r'//.*$', '', line)  # C/C++/Java/JavaScript
+        line = re.sub(r'#.*$', '', line)  # Python, Ruby, etc.
+        line = re.sub(r'--.*$', '', line)  # SQL, Haskell
+        line = re.sub(r'/\*.*?\*/', '', line, flags=re.DOTALL)  # Multi-line comments
+        cleaned_lines.append(line)
+    
+    code = '\n'.join(cleaned_lines)
+    
+    # Remove common placeholder patterns
+    placeholders = [
+        r'#\s*TODO.*',
+        r'//\s*TODO.*',
+        r'pass\s*$',
+        r'return\s*None',
+        r'return\s*0',
+        r'return\s*\[\]',
+        r'return\s*\{\}',
+        r'return\s*""',
+        r'return\s*null',
+    ]
+    for pattern in placeholders:
+        code = re.sub(pattern, '', code, flags=re.IGNORECASE | re.MULTILINE)
+    
+    # Remove all whitespace
+    code = re.sub(r'\s+', '', code)
+    
+    # Convert to lowercase
+    code = code.lower()
+    
+    return code
+
+
+def is_starter_code_only(submitted_code: str, starter_code: Optional[str]) -> bool:
+    """
+    Check if submitted code is essentially the same as starter code.
+    Returns True if codes are identical after normalization (ignoring whitespace/comments).
+    """
+    if not starter_code:
+        return False
+    
+    normalized_submitted = normalize_code(submitted_code)
+    normalized_starter = normalize_code(starter_code)
+    
+    # If normalized codes are the same, user didn't write anything
+    if normalized_submitted == normalized_starter:
+        return True
+    
+    # Also check if submitted code is just starter code with minimal changes (e.g., only whitespace)
+    # If the difference is very small (less than 5% of starter code length), consider it unchanged
+    if len(normalized_starter) > 0:
+        similarity = len(set(normalized_submitted) & set(normalized_starter)) / len(normalized_starter)
+        if similarity > 0.95 and len(normalized_submitted) <= len(normalized_starter) * 1.1:
+            return True
+    
+    return False
+
 logger = logging.getLogger("backend")
 
 # Initialize OpenAI client
@@ -249,6 +322,7 @@ def generate_simple_feedback(
     total_tests: int,
     time_spent_seconds: Optional[int] = None,
     total_execution_time: Optional[float] = None,
+    starter_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Generate rule-based feedback for LeetCode-style submissions.
@@ -259,6 +333,63 @@ def generate_simple_feedback(
     - Does NOT penalize missing I/O handling
     - Scores based on correctness, complexity, and code quality
     """
+    # Check if user only submitted starter code (no actual code written)
+    if starter_code and is_starter_code_only(source_code, starter_code):
+        logger.info("User submitted only starter code - returning 0 score (rule-based)")
+        return {
+            "overall_score": 0,
+            "feedback_summary": "No code was written. You submitted only the starter code template. Please implement the solution to receive a score.",
+            "one_liner": "No code written | Starter code only",
+            "code_quality": {
+                "score": 0,
+                "comments": "No code was written. Only the starter code template was submitted."
+            },
+            "efficiency": {
+                "time_complexity": "N/A",
+                "space_complexity": "N/A",
+                "comments": "Cannot analyze complexity as no implementation was provided."
+            },
+            "correctness": {
+                "score": 0,
+                "comments": "No implementation was provided. The starter code template does not solve the problem."
+            },
+            "suggestions": [
+                "Write your solution implementation in the function body",
+                "Remove placeholder comments like TODO or pass statements",
+                "Implement the algorithm logic to solve the problem"
+            ],
+            "strengths": [],
+            "areas_for_improvement": [
+                "Write actual code to solve the problem",
+                "Implement the required algorithm or logic",
+                "Test your solution with the provided test cases"
+            ],
+            "deduction_reasons": [
+                "No code was written - only starter code template was submitted",
+                "Starter code does not solve the problem"
+            ],
+            "improvement_suggestions": [
+                "Implement the solution in the function body",
+                "Write code that solves the problem statement",
+                "Test your implementation with the provided test cases"
+            ],
+            "ai_generated": False,
+            "evaluation_note": "Starter code only - no implementation provided",
+            "scoring_basis": {
+                "base_score": 0,
+                "correctness_score": 0,
+                "pass_rate": f"{total_passed}/{total_tests} ({int((total_passed / total_tests * 100) if total_tests > 0 else 0)}%)",
+                "efficiency_bonus": 0,
+                "code_quality_score": 0,
+                "code_quality_adjustment": 0,
+                "time_complexity": "N/A",
+                "space_complexity": "N/A",
+                "final_score": 0,
+                "points_deducted": 100,
+                "explanation": "Score is 0 because only starter code was submitted (no implementation provided)"
+            }
+        }
+    
     pass_rate = (total_passed / total_tests * 100) if total_tests > 0 else 0
     
     # Count meaningful lines (generic - exclude empty lines and common patterns)
@@ -537,6 +668,7 @@ def generate_code_feedback(
     public_total: Optional[int] = None,
     hidden_passed: Optional[int] = None,
     hidden_total: Optional[int] = None,
+    starter_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Generate AI feedback for a code submission.
@@ -549,6 +681,69 @@ def generate_code_feedback(
     - No penalty for missing I/O handling
     - Score based purely on function implementation quality
     """
+    # Check if user only submitted starter code (no actual code written)
+    if starter_code and is_starter_code_only(source_code, starter_code):
+        logger.info("User submitted only starter code - returning 0 score")
+        return {
+            "overall_score": 0,
+            "feedback_summary": "No code was written. You submitted only the starter code template. Please implement the solution to receive a score.",
+            "one_liner": "No code written | Starter code only",
+            "code_quality": {
+                "score": 0,
+                "comments": "No code was written. Only the starter code template was submitted."
+            },
+            "efficiency": {
+                "time_complexity": "N/A",
+                "space_complexity": "N/A",
+                "comments": "Cannot analyze complexity as no implementation was provided."
+            },
+            "correctness": {
+                "score": 0,
+                "comments": "No implementation was provided. The starter code template does not solve the problem."
+            },
+            "suggestions": [
+                "Write your solution implementation in the function body",
+                "Remove placeholder comments like TODO or pass statements",
+                "Implement the algorithm logic to solve the problem"
+            ],
+            "strengths": [],
+            "areas_for_improvement": [
+                "Write actual code to solve the problem",
+                "Implement the required algorithm or logic",
+                "Test your solution with the provided test cases"
+            ],
+            "deduction_reasons": [
+                "No code was written - only starter code template was submitted",
+                "Starter code does not solve the problem"
+            ],
+            "improvement_suggestions": [
+                "Implement the solution in the function body",
+                "Write code that solves the problem statement",
+                "Test your implementation with the provided test cases"
+            ],
+            "ai_generated": False,
+            "evaluation_note": "Starter code only - no implementation provided",
+            "test_breakdown": {
+                "public_passed": public_passed or 0,
+                "public_total": public_total or 0,
+                "hidden_passed": hidden_passed or 0,
+                "hidden_total": hidden_total or 0,
+            },
+            "scoring_basis": {
+                "base_score": 0,
+                "correctness_score": 0,
+                "pass_rate": f"{total_passed}/{total_tests} ({int((total_passed / total_tests * 100) if total_tests > 0 else 0)}%)",
+                "efficiency_bonus": 0,
+                "code_quality_score": 0,
+                "code_quality_adjustment": 0,
+                "time_complexity": "N/A",
+                "space_complexity": "N/A",
+                "final_score": 0,
+                "points_deducted": 100,
+                "explanation": "Score is 0 because only starter code was submitted (no implementation provided)"
+            }
+        }
+    
     # Calculate public/hidden breakdown if not provided
     if public_passed is None or public_total is None or hidden_passed is None or hidden_total is None:
         # Try to infer from test_results
@@ -568,6 +763,7 @@ def generate_code_feedback(
             total_passed=total_passed,
             total_tests=total_tests,
             time_spent_seconds=time_spent_seconds,
+            starter_code=starter_code,
         )
         # Add public/hidden breakdown to feedback
         feedback["test_breakdown"] = {
